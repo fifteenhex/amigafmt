@@ -215,3 +215,78 @@ struct amilib lib_console = {
 	.name = "console.device", .version = 40, .revision = 2,
 	.fd = fd_console, .impl = console_impl, .possize = 8, .device = 1,
 };
+
+/* ---- keymap.library: the same US keymap ---- */
+
+static void k_MapRawKey(struct frame *f)
+{
+	uint8_t *ie = PTR(A(0));
+	char buf[8];
+	int n;
+
+	if (!ie || ie[4] != 1) {                /* IECLASS_RAWKEY */
+		RET(0);
+		return;
+	}
+	n = keymap_convert(*(uint16_t *)(ie + 6), *(uint16_t *)(ie + 8), buf);
+	if (n > (int16_t)D(1)) {
+		RET(-1);
+		return;
+	}
+	memcpy(PTR(A(1)), buf, n);
+	RET(n);
+}
+
+/* MapANSI: characters back to (code, qualifier) pairs; 0 for one that
+   has no key */
+static void k_MapANSI(struct frame *f)
+{
+	const uint8_t *s = PTR(A(0));
+	uint8_t *out = PTR(A(1));
+	int32_t n = D(0), max = D(1), i, k = 0;
+
+	for (i = 0; i < n; i++) {
+		int code, found = 0;
+		for (code = 0; code < 0x60 && !found; code++) {
+			static const int quals[] = { 0, 1, 8 };
+			for (int q = 0; q < 3; q++) {
+				char b[8];
+				if (keymap_convert(code, quals[q], b) == 1 &&
+				    (uint8_t)b[0] == s[i]) {
+					if (k + 2 > max) {
+						RET(-1);
+						return;
+					}
+					out[k++] = code;
+					out[k++] = quals[q];
+					found = 1;
+					break;
+				}
+			}
+		}
+		if (!found) {
+			RET(0);
+			return;
+		}
+	}
+	RET(k / 2);
+}
+
+static void k_AskKeyMapDefault(struct frame *f) { RET(keymap_struct()); }
+
+static const struct fdent fd_keymap[] = {
+	{ 30, "SetKeyMapDefault", "a0" }, { 36, "AskKeyMapDefault", "" },
+	{ 42, "MapRawKey", "a0/a1/d1/a2" }, { 48, "MapANSI", "a0/d0/a1/d1/a2" },
+	{ 0, 0, 0 }
+};
+
+static const struct libimpl keymap_impl[] = {
+	{ "SetKeyMapDefault", c_Nop }, { "AskKeyMapDefault", k_AskKeyMapDefault },
+	{ "MapRawKey", k_MapRawKey }, { "MapANSI", k_MapANSI },
+	{ NULL, NULL }
+};
+
+struct amilib lib_keymap = {
+	.name = "keymap.library", .version = 40, .revision = 4,
+	.fd = fd_keymap, .impl = keymap_impl,
+};
