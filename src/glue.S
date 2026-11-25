@@ -1,0 +1,43 @@
+/*
+ * The crossing from C into the Amiga program.
+ *
+ * call_amiga(regs, pc): run Amiga code with every register from *regs
+ *   (a7 included) and a return address pushed on its stack; on return
+ *   store the registers back and return d0.  native_sp is the native
+ *   stack C runs on while Amiga code is running; call_amiga sets it to
+ *   its own frame and restores the outer value afterwards, so calls nest.
+ */
+	.text
+
+	.globl	call_amiga
+call_amiga:
+	movem.l	%d2-%d7/%a2-%a6,-(%sp)
+	move.l	native_sp,-(%sp)
+	move.l	%sp,native_sp
+	move.l	52(%sp),%a0		/* regs */
+	move.l	56(%sp),%a1		/* pc */
+	move.l	60(%a0),%a2		/* the Amiga sp */
+	move.l	#amiga_return,-(%a2)
+	move.l	%a1,-(%a2)
+	move.l	%a2,%sp
+	movem.l	(%a0),%d0-%d7/%a0-%a6
+	rts
+amiga_return:
+	move.l	%a6,-(%sp)
+	move.l	native_sp,%a6
+	move.l	52(%a6),%a6
+	movem.l	%d0-%d7/%a0-%a5,(%a6)
+	move.l	(%sp)+,56(%a6)
+	move.l	%sp,60(%a6)
+	move.l	native_sp,%sp
+	move.l	(%sp)+,native_sp
+	movem.l	(%sp)+,%d2-%d7/%a2-%a6
+	rts
+
+	.data
+	.globl	native_sp
+	.balign	4
+native_sp:
+	.long	0
+
+	.section .note.GNU-stack,"",%progbits

@@ -1,0 +1,39 @@
+project('amigafmt', 'c',
+  version: '0.1',
+  meson_version: '>= 1.1',
+  default_options: ['buildtype=debugoptimized', 'c_std=gnu11', 'warning_level=2'])
+
+cc = meson.get_compiler('c')
+python = find_program('python3')
+
+cflags = ['-m' + get_option('cpu'), '-Wno-unused-parameter', '-Wno-sign-compare',
+          '-fno-strict-aliasing']
+add_project_arguments(cflags, language: 'c')
+add_project_link_arguments('-static', language: 'c')
+
+# Debian's gcc 16 for m68k spills a float that is live across a call as
+# 80-bit extended and reloads it as a 4-byte single (wrong code at -O2).
+# tools/floatcheck.c reproduces it; when it fails, or cannot be run,
+# -ffloat-store avoids it.
+if meson.can_run_host_binaries()
+  r = cc.run(files('tools/floatcheck.c'), args: cflags + ['-O2', '-lm'],
+             name: 'floats survive a call without -ffloat-store')
+  need_float_store = not r.compiled() or r.returncode() != 0
+else
+  need_float_store = true
+  message('cannot run host binaries: assuming -ffloat-store is needed')
+endif
+if need_float_store
+  add_project_arguments('-ffloat-store', language: 'c')
+endif
+
+srcs = files(
+  'src/main.c', 'src/hunk.c', 'src/amem.c', 'src/glue.S')
+amigafmt = executable('amigafmt', srcs,
+  install: true)
+
+install_data('tools/register.sh', install_dir: get_option('bindir'),
+             rename: 'amigafmt-register', install_mode: 'rwxr-xr-x')
+install_data('README.md', install_dir: get_option('datadir') / 'doc' / 'amigafmt')
+
+subdir('tests')

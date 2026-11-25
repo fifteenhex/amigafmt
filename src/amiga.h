@@ -1,0 +1,398 @@
+/*
+ * AmigaOS structures, as the programs see them.
+ *
+ * m68k Linux aligns 32-bit types to 2 bytes, exactly like the Amiga
+ * compilers, so these lay out as in the NDK.  Layouts follow amitools'
+ * vamos/libstructs (exec_.py, dos.py); key offsets are asserted below.
+ */
+#ifndef AMIGA_H
+#define AMIGA_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+typedef uint32_t APTR;          /* an Amiga pointer, as a number */
+typedef uint32_t BPTR;          /* address >> 2 */
+
+#define MKBADDR(p)  ((BPTR)(uintptr_t)(p) >> 2)
+#define BADDR(b)    ((void *)(uintptr_t)((uint32_t)(b) << 2))
+#define PTR(x)      ((void *)(uintptr_t)(x))
+#define APTR_OF(p)  ((APTR)(uintptr_t)(p))
+
+#define DOSTRUE     (-1)
+#define DOSFALSE    0
+
+struct Node {
+	APTR ln_Succ, ln_Pred;
+	uint8_t ln_Type;
+	int8_t ln_Pri;
+	APTR ln_Name;
+};
+
+struct MinNode {
+	APTR mln_Succ, mln_Pred;
+};
+
+struct List {
+	APTR lh_Head, lh_Tail, lh_TailPred;
+	uint8_t lh_Type, l_pad;
+};
+
+struct MinList {
+	APTR mlh_Head, mlh_Tail, mlh_TailPred;
+};
+
+#define NT_TASK      1
+#define NT_MSGPORT   4
+#define NT_MESSAGE   5
+#define NT_LIBRARY   9
+#define NT_PROCESS   13
+
+struct Library {
+	struct Node lib_Node;
+	uint8_t lib_Flags, lib_pad;
+	uint16_t lib_NegSize, lib_PosSize, lib_Version, lib_Revision;
+	APTR lib_IdString;
+	uint32_t lib_Sum;
+	uint16_t lib_OpenCnt;
+};
+
+struct MsgPort {
+	struct Node mp_Node;
+	uint8_t mp_Flags, mp_SigBit;
+	APTR mp_SigTask;
+	struct List mp_MsgList;
+};
+
+struct Message {
+	struct Node mn_Node;
+	APTR mn_ReplyPort;
+	uint16_t mn_Length;
+};
+
+struct Task {
+	struct Node tc_Node;
+	uint8_t tc_Flags, tc_State;
+	int8_t tc_IDNestCnt, tc_TDNestCnt;
+	uint32_t tc_SigAlloc, tc_SigWait, tc_SigRecvd, tc_SigExcept;
+	uint16_t tc_TrapAlloc, tc_TrapAble;
+	APTR tc_ExceptData, tc_ExceptCode, tc_TrapData, tc_TrapCode;
+	APTR tc_SPReg, tc_SPLower, tc_SPUpper, tc_Switch, tc_Launch;
+	struct List tc_MemEntry;
+	APTR tc_UserData;
+};
+
+struct IntVector {
+	APTR iv_Data, iv_Code, iv_Node;
+};
+
+struct SoftIntList {
+	struct List sh_List;
+	uint16_t sh_Pad;
+};
+
+struct ExecBase {
+	struct Library LibNode;
+	uint16_t SoftVer;
+	int16_t LowMemChkSum;
+	uint32_t ChkBase;
+	APTR ColdCapture, CoolCapture, WarmCapture, SysStkUpper, SysStkLower;
+	uint32_t MaxLocMem;
+	APTR DebugEntry, DebugData, AlertData, MaxExtMem;
+	uint16_t ChkSum;
+	struct IntVector IntVects[16];
+	APTR ThisTask;
+	uint32_t IdleCount, DispCount;
+	uint16_t Quantum, Elapsed, SysFlags;
+	int8_t IDNestCnt, TDNestCnt;
+	uint16_t AttnFlags, AttnResched;
+	APTR ResModules, TaskTrapCode, TaskExceptCode, TaskExitCode;
+	uint32_t TaskSigAlloc;
+	uint16_t TaskTrapAlloc;
+	struct List MemList, ResourceList, DeviceList, IntrList, LibList;
+	struct List PortList, TaskReady, TaskWait;
+	struct SoftIntList SoftInts[5];
+	uint32_t LastAlert[4];
+	uint8_t VBlankFrequency, PowerSupplyFrequency;
+	struct List SemaphoreList;
+	APTR KickMemPtr, KickTagPtr, KickCheckSum;
+	uint16_t ex_Pad0;
+	uint32_t ex_LaunchPoint;
+	APTR ex_RamLibPrivate;
+	uint32_t ex_EClockFrequency, ex_CacheControl, ex_TaskID;
+	uint32_t ex_Reserved1[5];
+	APTR ex_MMULock;
+	uint32_t ex_Reserved2[3];
+	struct MinList ex_MemHandlers;
+	APTR ex_MemHandler;
+};
+
+#define AFF_68010 (1 << 0)
+#define AFF_68020 (1 << 1)
+#define AFF_68030 (1 << 2)
+#define AFF_68040 (1 << 3)
+#define AFF_68881 (1 << 4)
+#define AFF_68882 (1 << 5)
+#define AFF_FPU40 (1 << 6)
+#define AFF_68060 (1 << 7)
+
+struct DateStamp {
+	int32_t ds_Days, ds_Minute, ds_Tick;
+};
+
+struct FileLock {
+	BPTR fl_Link;
+	uint32_t fl_Key;
+	int32_t fl_Access;
+	APTR fl_Task;
+	BPTR fl_Volume;
+};
+
+struct FileHandle {
+	APTR fh_Link, fh_Port, fh_Type;
+	int32_t fh_Buf, fh_Pos, fh_End;
+	int32_t fh_Funcs, fh_Func2, fh_Func3;
+	int32_t fh_Args, fh_Arg2;
+};
+
+struct CommandLineInterface {
+	int32_t cli_Result2;
+	BPTR cli_SetName, cli_CommandDir;
+	int32_t cli_ReturnCode;
+	BPTR cli_CommandName;
+	int32_t cli_FailLevel;
+	BPTR cli_Prompt, cli_StandardInput, cli_CurrentInput, cli_CommandFile;
+	int32_t cli_Interactive, cli_Background;
+	BPTR cli_CurrentOutput;
+	int32_t cli_DefaultStack;
+	BPTR cli_StandardOutput, cli_Module;
+};
+
+struct Process {
+	struct Task pr_Task;
+	struct MsgPort pr_MsgPort;
+	int16_t pr_Pad;
+	BPTR pr_SegList;
+	int32_t pr_StackSize;
+	APTR pr_GlobVec;
+	int32_t pr_TaskNum;
+	BPTR pr_StackBase;
+	int32_t pr_Result2;
+	BPTR pr_CurrentDir, pr_CIS, pr_COS;
+	APTR pr_ConsoleTask, pr_FileSystemTask;
+	BPTR pr_CLI;
+	APTR pr_ReturnAddr, pr_PktWait, pr_WindowPtr;
+	BPTR pr_HomeDir;
+	int32_t pr_Flags;
+	APTR pr_ExitCode;
+	int32_t pr_ExitData;
+	APTR pr_Arguments;
+	struct MinList pr_LocalVars;
+	uint32_t pr_ShellPrivate;
+	BPTR pr_CES;
+};
+
+struct FileInfoBlock {
+	uint32_t fib_DiskKey;
+	int32_t fib_DirEntryType;
+	char fib_FileName[108];
+	int32_t fib_Protection, fib_EntryType;
+	uint32_t fib_Size;
+	int32_t fib_NumBlocks;
+	struct DateStamp fib_Date;
+	char fib_Comment[80];
+	uint16_t fib_OwnerUID, fib_OwnerGID;
+	char fib_Reserved[32];
+};
+
+#define ST_ROOT      1
+#define ST_USERDIR   2
+#define ST_SOFTLINK  3
+#define ST_LINKDIR   4
+#define ST_FILE      (-3)
+#define ST_LINKFILE  (-4)
+#define ST_PIPEFILE  (-5)
+
+/* protection bits: RWED are active LOW */
+#define FIBF_DELETE   (1 << 0)
+#define FIBF_EXECUTE  (1 << 1)
+#define FIBF_WRITE    (1 << 2)
+#define FIBF_READ     (1 << 3)
+#define FIBF_ARCHIVE  (1 << 4)
+#define FIBF_PURE     (1 << 5)
+#define FIBF_SCRIPT   (1 << 6)
+
+struct InfoData {
+	int32_t id_NumSoftErrors, id_UnitNumber, id_DiskState;
+	int32_t id_NumBlocks, id_NumBlocksUsed, id_BytesPerBlock, id_DiskType;
+	BPTR id_VolumeNode;
+	int32_t id_InUse;
+};
+
+struct RootNode {
+	BPTR rn_TaskArray, rn_ConsoleSegment;
+	struct DateStamp rn_Time;
+	int32_t rn_RestartSeg;
+	BPTR rn_Info, rn_FileHandlerSegment;
+	struct MinList rn_CliList;
+	APTR rn_BootProc;
+	BPTR rn_ShellSegment;
+	int32_t rn_Flags;
+};
+
+struct DosLibrary {
+	struct Library dl_lib;
+	APTR dl_Root, dl_GV;
+	int32_t dl_A2, dl_A5, dl_A6;
+	APTR dl_Errors, dl_TimeReq, dl_UtilityBase, dl_IntuitionBase;
+};
+
+struct CSource {
+	APTR CS_Buffer;
+	int32_t CS_Length, CS_CurChr;
+};
+
+struct RDArgs {
+	struct CSource RDA_Source;
+	int32_t RDA_DAList;
+	APTR RDA_Buffer;
+	int32_t RDA_BufSiz;
+	APTR RDA_ExtHelp;
+	int32_t RDA_Flags;
+};
+
+#define RDAF_STDIN     (1 << 0)
+#define RDAF_NOALLOC   (1 << 1)
+#define RDAF_NOPROMPT  (1 << 2)
+
+struct AChain {
+	APTR an_Child, an_Parent;
+	BPTR an_Lock;
+	struct FileInfoBlock an_Info;
+	int8_t an_Flags;
+	uint8_t an_String[1];
+};
+
+struct AnchorPath {
+	APTR ap_Base, ap_Last;
+	int32_t ap_BreakBits, ap_FoundBreak;
+	int8_t ap_Flags, ap_Reserved;
+	int16_t ap_Strlen;
+	struct FileInfoBlock ap_Info;
+	char ap_Buf[1];
+};
+
+#define APF_DOWILD      (1 << 0)
+#define APF_ITSWILD     (1 << 0)
+#define APF_DODIR       (1 << 2)
+#define APF_DIDDIR      (1 << 3)
+#define APF_NOMEMERR    (1 << 4)
+#define APF_DODOT       (1 << 5)
+#define APF_DirChanged  (1 << 6)
+#define APF_FollowHLinks (1 << 7)
+
+struct DateTime {
+	struct DateStamp dat_Stamp;
+	uint8_t dat_Format, dat_Flags;
+	APTR dat_StrDay, dat_StrDate, dat_StrTime;
+};
+
+struct ExAllControl {
+	uint32_t eac_Entries, eac_LastKey;
+	APTR eac_MatchString, eac_MatchFunc;
+};
+
+struct TagItem {
+	uint32_t ti_Tag, ti_Data;
+};
+
+struct Hook {
+	struct MinNode h_MinNode;
+	APTR h_Entry, h_SubEntry, h_Data;
+};
+
+struct ClockData {
+	uint16_t sec, min, hour, mday, month, year, wday;
+};
+
+#define SIGBREAKF_CTRL_C (1 << 12)
+#define SIGBREAKF_CTRL_D (1 << 13)
+#define SIGBREAKF_CTRL_E (1 << 14)
+#define SIGBREAKF_CTRL_F (1 << 15)
+#define SIGF_DOS         (1 << 8)
+
+#define MEMF_PUBLIC   (1 << 0)
+#define MEMF_CHIP     (1 << 1)
+#define MEMF_FAST     (1 << 2)
+#define MEMF_CLEAR    (1 << 16)
+#define MEMF_LARGEST  (1 << 17)
+#define MEMF_TOTAL    (1 << 19)
+
+#define MODE_OLDFILE    1005
+#define MODE_NEWFILE    1006
+#define MODE_READWRITE  1004
+#define SHARED_LOCK     (-2)
+#define EXCLUSIVE_LOCK  (-1)
+#define OFFSET_BEGINNING (-1)
+#define OFFSET_CURRENT  0
+#define OFFSET_END      1
+
+#define ERROR_NO_FREE_STORE          103
+#define ERROR_BAD_TEMPLATE           114
+#define ERROR_BAD_NUMBER             115
+#define ERROR_REQUIRED_ARG_MISSING   116
+#define ERROR_KEY_NEEDS_ARG          117
+#define ERROR_TOO_MANY_ARGS          118
+#define ERROR_UNMATCHED_QUOTES       119
+#define ERROR_LINE_TOO_LONG          120
+#define ERROR_FILE_NOT_OBJECT        121
+#define ERROR_OBJECT_IN_USE          202
+#define ERROR_OBJECT_EXISTS          203
+#define ERROR_DIR_NOT_FOUND          204
+#define ERROR_OBJECT_NOT_FOUND       205
+#define ERROR_BAD_STREAM_NAME        206
+#define ERROR_OBJECT_TOO_LARGE       207
+#define ERROR_ACTION_NOT_KNOWN       209
+#define ERROR_INVALID_COMPONENT_NAME 210
+#define ERROR_INVALID_LOCK           211
+#define ERROR_OBJECT_WRONG_TYPE      212
+#define ERROR_DISK_WRITE_PROTECTED   214
+#define ERROR_RENAME_ACROSS_DEVICES  215
+#define ERROR_DIRECTORY_NOT_EMPTY    216
+#define ERROR_TOO_MANY_LEVELS        217
+#define ERROR_DEVICE_NOT_MOUNTED     218
+#define ERROR_SEEK_ERROR             219
+#define ERROR_DISK_FULL              221
+#define ERROR_DELETE_PROTECTED       222
+#define ERROR_WRITE_PROTECTED        223
+#define ERROR_READ_PROTECTED         224
+#define ERROR_NO_MORE_ENTRIES        232
+#define ERROR_IS_SOFT_LINK           233
+#define ERROR_BAD_HUNK               235
+#define ERROR_NOT_IMPLEMENTED        236
+#define ERROR_BUFFER_OVERFLOW        303
+#define ERROR_BREAK                  304
+
+#define CHK(s, f, o) _Static_assert(offsetof(struct s, f) == (o), #s "." #f)
+CHK(Library, lib_OpenCnt, 32);
+CHK(ExecBase, ThisTask, 276);
+CHK(ExecBase, AttnFlags, 296);
+CHK(ExecBase, LibList, 378);
+CHK(ExecBase, ex_EClockFrequency, 568);
+CHK(ExecBase, ex_MemHandler, 628);
+CHK(Task, tc_SPLower, 58);
+CHK(Task, tc_UserData, 88);
+CHK(Process, pr_MsgPort, 92);
+CHK(Process, pr_Result2, 148);
+CHK(Process, pr_CLI, 172);
+CHK(Process, pr_Arguments, 204);
+CHK(Process, pr_CES, 224);
+CHK(FileInfoBlock, fib_Size, 124);
+CHK(FileInfoBlock, fib_Comment, 144);
+CHK(CommandLineInterface, cli_Module, 60);
+CHK(AnchorPath, ap_Info, 20);
+CHK(AnchorPath, ap_Buf, 280);
+CHK(DosLibrary, dl_Root, 34);
+#undef CHK
+
+#endif
