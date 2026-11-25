@@ -416,6 +416,10 @@ void intui_event(struct awin *a, const struct wbp_event *e)
 		intui_easy_event(a, e);
 		return;
 	}
+	if (a->aslreq) {
+		asl_event(a, e);
+		return;
+	}
 	if (e->class != IDCMP_VANILLAKEY)
 		deliver_raw(a);
 	if (e->class & (IDCMP_MOUSEBUTTONS | IDCMP_MOUSEMOVE)) {
@@ -1482,6 +1486,32 @@ static struct awin *easy_open(const char *title, const char *body,
 		gfx_text(a->rp, gl[i], strlen(gl[i]));
 	}
 	gui_flush();
+	return a;
+}
+
+/* a centred, activated window of ours with a cleared inner area */
+struct awin *intui_open_plain(const char *title, int iw, int ih)
+{
+	struct wspec s;
+	struct Window *win;
+	struct awin *a;
+
+	if (gui_connect())
+		return NULL;
+	memset(&s, 0, sizeof(s));
+	s.iw = iw;
+	s.ih = ih;
+	s.left = (gui_screen.width - iw) / 2;
+	s.top = (gui_screen.height - ih) / 2;
+	s.flags = WFLG_DRAGBAR | WFLG_DEPTHGADGET | WFLG_ACTIVATE | WFLG_RMBTRAP |
+		  WFLG_CLOSEGADGET;
+	s.title = APTR_OF(strcpy(amem_alloc(strlen(title) + 1), title));
+	win = open_window(&s);
+	if (!win)
+		return NULL;
+	a = gui_by_window(APTR_OF(win));
+	gfx_rectfill(a->rp, a->bl, a->bt, a->bl + a->iw - 1, a->bt + a->ih - 1,
+		     gui_pens[WBP_BACKGROUNDPEN]);
 	return a;
 }
 

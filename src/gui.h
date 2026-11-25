@@ -25,6 +25,7 @@ struct awin {
 	uint32_t lastsel_s, lastsel_us;
 	int easy;                       /* an EasyRequest window of ours */
 	int easy_result;
+	void *aslreq;                   /* a file requester of ours */
 	struct awin *next;
 };
 

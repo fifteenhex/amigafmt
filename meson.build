@@ -34,7 +34,7 @@ srcs = files(
   'src/exec.c', 'src/fmt.c', 'src/dos.c', 'src/lock.c', 'src/readargs.c',
   'src/pattern.c', 'src/date.c', 'src/utility.c', 'src/intuition.c',
   'src/gfx.c', 'src/gui.c', 'src/gadtools.c', 'src/icon.c', 'src/boopsi.c',
-  'src/math.c', 'src/timer.c', 'src/fdtab.c', 'src/glue.S')
+  'src/asl.c', 'src/math.c', 'src/timer.c', 'src/fdtab.c', 'src/glue.S')
 amigafmt = executable('amigafmt', srcs,
   dependencies: [libm],
   install: true)
