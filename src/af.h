@@ -57,6 +57,10 @@ struct amilib {
 	int hidden;                     /* internal: in no exec list */
 	const struct libimpl *impl2;    /* more implementations */
 	const struct libimpl *impl3;    /* and more, bound last */
+	/* a base per opener (bsdsocket): OpenLibrary returns open()'s copy
+	   of the base; CloseLibrary offers every base to close() first */
+	struct Library *(*open)(struct amilib *l);
+	int (*close)(struct Library *b);
 	/* filled in by lib_build() */
 	struct Library *base;
 	int nslots;
@@ -72,6 +76,7 @@ extern struct amilib lib_exec, lib_dos, lib_utility, lib_version,
 extern struct amilib *all_libs[];
 
 struct Library *lib_build(struct amilib *l);
+struct Library *lib_clone(struct amilib *l);
 struct amilib *lib_find(const char *name);
 const char *lib_fn_name(struct amilib *l, int slot, const char **regs);
 struct frame *amiga_dispatch(struct frame *f);

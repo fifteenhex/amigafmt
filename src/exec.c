@@ -941,6 +941,8 @@ static void e_OpenLibrary(struct frame *f)
 		return;
 	}
 	b->lib_OpenCnt++;
+	if (l->open)
+		b = l->open(l);
 	RET(b);
 }
 
@@ -957,6 +959,13 @@ static void e_CloseLibrary(struct frame *f)
 
 	if (ramlib_close(f, b))
 		return;
+	for (int i = 0; b && all_libs[i]; i++)
+		if (all_libs[i]->close && all_libs[i]->close(b)) {
+			struct Library *t = all_libs[i]->base;
+			if (t && t->lib_OpenCnt)
+				t->lib_OpenCnt--;
+			return;
+		}
 	if (b && b->lib_OpenCnt)
 		b->lib_OpenCnt--;
 }

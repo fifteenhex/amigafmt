@@ -165,6 +165,25 @@ struct Library *lib_build(struct amilib *l)
 	return b;
 }
 
+/*
+ * A private copy of a library's base for one opener: the same jump table
+ * (it jumps to the same stubs, which carry the library's number) and a
+ * zeroed positive part; the library tells its bases apart by a6.
+ */
+struct Library *lib_clone(struct amilib *l)
+{
+	struct Library *t = lib_build(l), *b;
+	uint32_t neg = t->lib_NegSize, pos = t->lib_PosSize;
+	char *mem = amem_alloc(neg + pos);
+
+	memcpy(mem, (char *)t - neg, neg + sizeof(struct Library));
+	b = (struct Library *)(mem + neg);
+	b->lib_OpenCnt = 1;
+	b->lib_Node.ln_Succ = b->lib_Node.ln_Pred = 0;
+	cache_flush(mem, neg);
+	return b;
+}
+
 struct amilib *lib_find(const char *name)
 {
 	const char *p = strrchr(name, '/'), *q = strrchr(name, ':');
