@@ -68,7 +68,7 @@ extern struct amilib lib_exec, lib_dos, lib_utility, lib_version,
 	lib_intuition, lib_graphics, lib_gadtools, lib_mathieeedoubbas,
 	lib_mathieeedoubtrans, lib_mathieeesingbas, lib_mathieeesingtrans,
 	lib_mathffp, lib_mathtrans, lib_timer, lib_icon, lib_layers, lib_console, lib_asl, lib_iffparse, lib_boopsi, lib_workbench, lib_datatypes,
-	lib_diskfont, lib_locale, lib_keymap;
+	lib_diskfont, lib_locale, lib_keymap, lib_input;
 extern struct amilib *all_libs[];
 
 struct Library *lib_build(struct amilib *l);

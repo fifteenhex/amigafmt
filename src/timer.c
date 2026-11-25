@@ -340,10 +340,10 @@ void io_DoIO(struct frame *f)
 {
 	struct ioreq *io = PTR(A(1));
 
-	extern int console_io(void *io);
+	extern int console_io(void *io), input_io(void *io);
 
 	if (!is_timer(io)) {
-		if (console_io(io)) {
+		if (console_io(io) || input_io(io)) {
 			RET(io->io_Error);
 			return;
 		}
@@ -359,10 +359,10 @@ void io_SendIO(struct frame *f)
 {
 	struct ioreq *io = PTR(A(1));
 
-	extern int console_io(void *io);
+	extern int console_io(void *io), input_io(void *io);
 
 	if (!is_timer(io)) {
-		if (console_io(io)) {
+		if (console_io(io) || input_io(io)) {
 			io->io_Flags &= ~IOF_QUICK;
 			complete(io);
 			return;

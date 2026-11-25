@@ -768,6 +768,10 @@ static void e_OpenDevice(struct frame *f)
 	uint8_t *io = PTR(A(1));
 	int r = io ? timer_open(PTR(A(0)), D(0), io) : -1;
 
+	if (r && io && !strcasecmp(PTR(A(0)), "input.device")) {
+		*(uint32_t *)(io + 20) = APTR_OF(lib_build(&lib_input));
+		r = 0;
+	}
 	if (r && io && !strcasecmp(PTR(A(0)), "console.device")) {
 		/* CONU_LIBRARY, or a unit on a window (writes only) */
 		*(uint32_t *)(io + 20) = APTR_OF(lib_build(&lib_console));

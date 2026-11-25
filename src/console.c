@@ -290,3 +290,40 @@ struct amilib lib_keymap = {
 	.name = "keymap.library", .version = 40, .revision = 4,
 	.fd = fd_keymap, .impl = keymap_impl,
 };
+
+/* ---- input.device: accepted, but the input stream is wbde's ----
+ * OpenDevice succeeds and every command completes (IND_ADDHANDLER,
+ * IND_WRITEEVENT, IND_SET*): programs open it to add a handler or to set
+ * the key repeat, and refuse to go on when it fails.  Handlers are never
+ * called: input reaches programs as IntuiMessages from wbde.
+ * PeekQualifier() says no qualifiers.
+ */
+int input_io(void *iop)
+{
+	uint8_t *io = iop;
+
+	if (!lib_input.base || *(uint32_t *)(io + 20) != APTR_OF(lib_input.base))
+		return 0;
+	*(uint32_t *)(io + 32) = 0;             /* io_Actual */
+	io[31] = 0;
+	return 1;
+}
+
+static void in_Zero(struct frame *f) { RET(0); }
+
+static const struct fdent fd_input[] = {
+	{ 30, "BeginIO", "a1" }, { 36, "AbortIO", "a1" },
+	{ 42, "PeekQualifier", "" },
+	{ 0, 0, 0 }
+};
+
+static const struct libimpl input_impl[] = {
+	{ "PeekQualifier", in_Zero },
+	{ "BeginIO", c_Nop }, { "AbortIO", c_Nop },
+	{ NULL, NULL }
+};
+
+struct amilib lib_input = {
+	.name = "input.device", .version = 40, .revision = 1,
+	.fd = fd_input, .impl = input_impl, .possize = 8, .device = 1,
+};
