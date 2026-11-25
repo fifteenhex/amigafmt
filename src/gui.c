@@ -219,6 +219,57 @@ int gui_call(uint32_t type, uint32_t win, const void *p, uint32_t len,
 	return -1;
 }
 
+/*
+ * An event on a custom screen's own pixels: for its backdrop window there
+ * (the topmost containing the pointer; for keys the active one), in that
+ * window's coordinates.
+ */
+static void root_event(uint32_t sid, struct wbp_event *e)
+{
+	struct awin *a, *hit = NULL, *act = NULL;
+
+	if (af_trace)
+		fprintf(stderr, "amigafmt: screen %u event class $%x code $%x at %d,%d\n", sid,
+			e->class, e->code, e->mousex, e->mousey);
+	for (a = gui_wins; a; a = a->next) {
+		struct Window *w = a->w;
+		if (!a->root || !a->as || a->as->id != sid)
+			continue;
+		if (a->root_active && !act)
+			act = a;
+		if (!hit && e->mousex >= w->LeftEdge && e->mousey >= w->TopEdge &&
+		    e->mousex < w->LeftEdge + w->Width && e->mousey < w->TopEdge + w->Height)
+			hit = a;
+	}
+	if (e->class & (IDCMP_RAWKEY | IDCMP_VANILLAKEY))
+		a = act ? act : hit;
+	else if (e->class == IDCMP_MOUSEMOVE && act)
+		a = act;                /* moves go where the button went down */
+	else
+		a = hit ? hit : act;
+	if (!a)
+		return;
+	if (!a->root_active && e->class == IDCMP_MOUSEBUTTONS && e->code == SELECTDOWN) {
+		struct awin *o;
+		struct wbp_event ae = *e;
+		for (o = gui_wins; o; o = o->next)
+			if (o->root && o->root_active && o != a) {
+				o->root_active = 0;
+				ae.class = IDCMP_INACTIVEWINDOW;
+				intui_event(o, &ae);
+			}
+		a->root_active = 1;
+		ae.class = IDCMP_ACTIVEWINDOW;
+		intui_event(a, &ae);
+	}
+	e->mousex -= a->w->LeftEdge;
+	e->mousey -= a->w->TopEdge;
+	if (af_trace)
+		fprintf(stderr, "amigafmt: -> window $%x port $%x idcmp $%x\n", APTR_OF(a->w),
+			a->w->UserPort, a->w->IDCMPFlags);
+	intui_event(a, e);
+}
+
 static void dispatch_queue(void)
 {
 	while (nqueue) {
@@ -226,6 +277,11 @@ static void dispatch_queue(void)
 		struct awin *a;
 
 		memmove(queue, queue + 1, sizeof(queue[0]) * --nqueue);
+		if (q.win & WBP_SCREEN_EVENT) {
+			if (!q.resize)
+				root_event(q.win & ~WBP_SCREEN_EVENT, &q.e);
+			continue;
+		}
 		a = by_id(q.win);
 		if (q.resize) {
 			if (a && q.mfd >= 0) {
@@ -426,11 +482,18 @@ struct awin *gui_open(const struct wbp_open *o)
 	return a;
 }
 
+void gui_add_root(struct awin *a)
+{
+	a->next = gui_wins;
+	gui_wins = a;
+}
+
 void gui_close(struct awin *a)
 {
 	struct awin **pp;
 
-	gui_send(WBP_CLOSE, a->id, NULL, 0);
+	if (!a->root)
+		gui_send(WBP_CLOSE, a->id, NULL, 0);
 	for (pp = &gui_wins; *pp; pp = &(*pp)->next)
 		if (*pp == a) {
 			*pp = a->next;
@@ -463,6 +526,8 @@ struct awin *gui_by_rp(APTR rp)
 
 void gui_damage(struct awin *a, int x0, int y0, int x1, int y1)
 {
+	if (a->root)
+		return;         /* it draws into the screen's buffer */
 	if (x0 < 0)
 		x0 = 0;
 	if (y0 < 0)
@@ -503,7 +568,16 @@ void gui_flush(void)
 	struct awin *a;
 
 	as_flush();
-	for (a = gui_wins; a; a = a->next)
+	for (a = gui_wins; a; a = a->next) {
+		if (a->root && a->as) {
+			/* RMBTRAP the program may set in Window.Flags itself */
+			int rmb = (a->w->Flags & 0x00010000) != 0;
+			if (rmb != a->root_rmb) {
+				uint32_t fl = rmb ? WBP_SCF_RMBTRAP : 0;
+				a->root_rmb = rmb;
+				gui_send(WBP_SCREEN_FLAGS, a->as->id, &fl, sizeof(fl));
+			}
+		}
 		if (a->dirty) {
 			struct wbp_rect r = { a->dx0, a->dy0, a->dx1 - a->dx0 + 1,
 					      a->dy1 - a->dy0 + 1 };
@@ -513,6 +587,7 @@ void gui_flush(void)
 					a->id, r.x, r.y, r.w, r.h);
 			gui_send(WBP_DAMAGE, a->id, &r, sizeof(r));
 		}
+	}
 }
 
 /* read what has arrived (waiting up to timeout_ms first); 1 if anything */

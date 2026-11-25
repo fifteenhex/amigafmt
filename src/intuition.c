@@ -608,6 +608,16 @@ void intui_event(struct awin *a, const struct wbp_event *e)
 	case IDCMP_ACTIVEWINDOW:
 		w->Flags |= WFLG_WINDOWACTIVE;
 		screen_title(a);
+		if (!a->root && a->as) {        /* the screen's backdrop is not active now */
+			struct awin *o;
+			for (o = gui_wins; o; o = o->next)
+				if (o->root && o->as == a->as && o->root_active) {
+					struct wbp_event ie = *e;
+					o->root_active = 0;
+					ie.class = IDCMP_INACTIVEWINDOW;
+					intui_event(o, &ie);
+				}
+		}
 		break;
 	case IDCMP_INACTIVEWINDOW:
 		w->Flags &= ~WFLG_WINDOWACTIVE;
@@ -739,6 +749,82 @@ static void read_tags(struct wspec *s, struct TagItem *t)
 	}
 }
 
+/*
+ * A backdrop window on a custom screen is a part of the screen itself, as
+ * Intuition's is: no wbde window, its RastPort draws into the screen's
+ * buffer through a Layer with the window's bounds, and wbde sends what
+ * happens on the screen's own pixels (buttons, moves, keys while no other
+ * window is active, menus) to it.  A program that draws into the
+ * Screen's BitMap draws into the same pixels, which is what paint
+ * programs do.  Its frame, if it asked for one, is not drawn.
+ */
+static struct MsgPort *new_port(void);
+static struct Window *open_root(struct wspec *s, struct ascreen *as, struct Screen *scr)
+{
+	struct awin *a = calloc(1, sizeof(*a));
+	struct Window *w = amem_alloc(sizeof(struct Window));
+	struct RastPort *rp = amem_alloc(sizeof(*rp));
+	uint8_t *layer = amem_alloc(160);
+	int16_t *b = (int16_t *)(layer + 16);
+	int x = s->left, y = s->top;
+	int ww = s->iw ? s->iw : s->width ? s->width : as->w - x;
+	int hh = s->ih ? s->ih : s->height ? s->height : as->h - y;
+
+	a->root = 1;
+	a->as = as;
+	a->w = w;
+	a->rp = rp;
+	a->iw = ww;
+	a->ih = hh;
+	gfx_init_rp(rp);
+	rp->FgPen = 1;
+	rp->Font = APTR_OF(as->font);
+	rp->TxHeight = as->font->tf_YSize;
+	rp->TxWidth = as->font->tf_XSize;
+	rp->TxBaseline = as->font->tf_Baseline;
+	rp->BitMap = APTR_OF(&scr->BitMap);
+	b[0] = x, b[1] = y, b[2] = x + ww - 1, b[3] = y + hh - 1;   /* bounds */
+	*(uint32_t *)(layer + 12) = APTR_OF(rp);
+	*(uint32_t *)(layer + 40) = APTR_OF(w);
+	rp->Layer = APTR_OF(layer);
+	w->LeftEdge = x;
+	w->TopEdge = y;
+	w->Width = ww;
+	w->Height = hh;
+	w->GZZWidth = ww;
+	w->GZZHeight = hh;
+	w->RPort = APTR_OF(rp);
+	w->WLayer = APTR_OF(layer);
+	w->WScreen = APTR_OF(scr);
+	w->IFont = APTR_OF(as->font);
+	w->Flags = s->flags;
+	if (s->flags & WFLG_ACTIVATE) {
+		w->Flags |= WFLG_WINDOWACTIVE;
+		a->root_active = 1;
+	}
+	w->Title = s->title;
+	w->ScreenTitle = s->screentitle;
+	w->MinWidth = s->minw;
+	w->MinHeight = s->minh;
+	w->MaxWidth = s->maxw;
+	w->MaxHeight = s->maxh;
+	w->DetailPen = as->pens[WBP_DETAILPEN];
+	w->BlockPen = as->pens[WBP_BLOCKPEN];
+	w->IDCMPFlags = s->idcmp;
+	if (s->idcmp)
+		w->UserPort = APTR_OF(new_port());
+	w->FirstGadget = s->gadgets;
+	w->NextWindow = scr->FirstWindow;
+	scr->FirstWindow = APTR_OF(w);
+	a->root_rmb = -1;               /* sent at the first flush */
+	gui_add_root(a);
+	if (af_trace)
+		fprintf(stderr, "amigafmt: backdrop window %d,%d %dx%d on screen %u: the "
+			"screen's own pixels\n", x, y, ww, hh, as->id);
+	intui_render_gadgets(a, PTR(w->FirstGadget), -1);
+	return w;
+}
+
 static struct Window *open_window(struct wspec *s)
 {
 	struct wbp_open o;
@@ -811,6 +897,8 @@ static struct Window *open_window(struct wspec *s)
 		  IDCMP_MENUPICK | IDCMP_ACTIVEWINDOW | IDCMP_INACTIVEWINDOW;
 	if (s->title)
 		snprintf(o.title, sizeof(o.title), "%s", (char *)PTR(s->title));
+	if (as && (s->flags & WFLG_BACKDROP))
+		return open_root(s, as, scr);
 	if (af_trace)
 		fprintf(stderr, "amigafmt: window at %d,%d size %d,%d inner %d,%d "
 			"flags $%x min %d,%d max %d,%d -> inner %d,%d\n", s->left, s->top, s->width,
@@ -938,19 +1026,20 @@ static void i_ModifyIDCMP(struct frame *f)
 {
 	struct awin *a = gui_by_window(A(0));
 	struct Window *w = PTR(A(0));
+	uint32_t flags = D(0);
 
-	RET(1);
+	RET(1);                 /* (after reading d0: it is the result too) */
 	if (!a)
 		return;
-	if (D(0) && !w->UserPort)
+	if (flags && !w->UserPort)
 		w->UserPort = APTR_OF(new_port());
-	else if (!D(0) && w->UserPort) {
+	else if (!flags && w->UserPort) {
 		free_port_msgs(a);
 		/* Intuition frees the port only if it made it; we cannot tell
 		   a program's shared port apart, so it is left alone */
 		w->UserPort = 0;
 	}
-	w->IDCMPFlags = D(0);
+	w->IDCMPFlags = flags;
 }
 
 static void i_SetWindowTitles(struct frame *f)
@@ -1281,7 +1370,10 @@ static void send_menus(struct awin *a)
 			}
 		}
 	}
-	gui_send(WBP_SET_MENUS, a->id, m, n * sizeof(*m));
+	if (a->root)
+		gui_send(WBP_SCREEN_MENUS, a->as->id, m, n * sizeof(*m));
+	else
+		gui_send(WBP_SET_MENUS, a->id, m, n * sizeof(*m));
 	free(m);
 }
 
@@ -1350,7 +1442,9 @@ static void i_ClearMenuStrip(struct frame *f)
 	struct Window *w = PTR(A(0));
 
 	w->MenuStrip = 0;
-	if (a)
+	if (a && a->root)
+		gui_send(WBP_SCREEN_MENUS, a->as->id, NULL, 0);
+	else if (a)
 		gui_send(WBP_SET_MENUS, a->id, NULL, 0);
 }
 

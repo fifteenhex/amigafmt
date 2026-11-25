@@ -10,6 +10,10 @@
 struct awin {
 	struct Window *w;
 	struct ascreen *as;             /* its custom screen, NULL on Workbench */
+	int root;                       /* a backdrop window that IS the screen's
+					   pixels: no wbde window, drawn in the
+					   screen's buffer through its Layer */
+	int root_active, root_rmb;
 	struct RastPort *rp;
 	struct BitMap *bm;
 	uint32_t id;                    /* wbde's */
@@ -49,8 +53,18 @@ struct ascreen {
 	int barh, wbortop;
 	int pub, publocks;
 	char pubname[64];
+	/* the Screen's BitMap: real planes, the screen's pixels, write
+	   protected so that whatever writes them (graphics, or the program
+	   itself) marks the rows to convert into pix at the next flush */
+	uint8_t *planes[8];
+	uint8_t *alias[8];              /* the same memory, always writable: amigafmt's own drawing */
+	size_t planesize;
+	int bpr;
+	volatile int conv_y0, conv_y1;  /* rows to convert, y0 > y1: none */
 	struct ascreen *next;           /* front to back */
 };
+int screen_plane_fault(uint32_t addr);
+void as_rows_drawn(struct ascreen *as, int y0, int y1);
 extern struct ascreen *gui_screens;
 struct ascreen *as_by_screen(uint32_t scr);
 struct ascreen *as_by_rp(struct RastPort *rp);
@@ -84,6 +98,7 @@ void *gui_map(int fd, size_t size);
 void gui_unmap(void *p, size_t size);
 struct awin *gui_by_window(APTR w);
 struct awin *gui_by_rp(APTR rp);
+void gui_add_root(struct awin *a);
 
 /* intuition.c */
 void intui_event(struct awin *a, const struct wbp_event *e);

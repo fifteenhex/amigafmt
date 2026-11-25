@@ -17,9 +17,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/time.h>
 #include <ucontext.h>
 #include <unistd.h>
-#include "af.h"
+#include "gui.h"
 
 int af_trace;
 const char *af_progname = "amigafmt";
@@ -326,6 +327,8 @@ static void on_fault(int sig, siginfo_t *si, void *ucv)
 	uint32_t pc = g[R_PC], off;
 	int h, i;
 
+	if (sig == SIGSEGV && screen_plane_fault((uint32_t)(uintptr_t)si->si_addr))
+		return;         /* a write to a screen's planes: noted, page open */
 	if (sig == SIGSEGV && SysBase && (emulate_load(g) || emulate_store(g)))
 		return;
 	if ((sig == SIGILL || sig == SIGSEGV) && emulate_priv(g))
@@ -343,6 +346,41 @@ static void on_fault(int sig, siginfo_t *si, void *ucv)
 		fprintf(stderr, "amigafmt: the stack is exhausted; try -s "
 			"with more than %u bytes\n", stack_hi - stack_lo);
 	_exit(20);
+}
+
+/* AMIGAFMT_HANGDUMP=secs: say where the program is every so often (a hang) */
+static void on_alarm(int sig, siginfo_t *si, void *ucv)
+{
+	ucontext_t *uc = ucv;
+	greg_t *g = uc->uc_mcontext.gregs;
+	char buf[160];
+	int n, h;
+	uint32_t off;
+
+	(void)sig;
+	(void)si;
+	extern unsigned long screen_plane_faults;
+
+	n = snprintf(buf, sizeof(buf), "amigafmt: hangdump: pc $%08x a6 $%08x in call %x, "
+		     "%lu plane faults", (uint32_t)g[R_PC], (uint32_t)g[R_A0 + 6],
+		     resume_frame ? resume_frame->id : 0, screen_plane_faults);
+	if (hunk_where(g[R_PC], the_seg, &h, &off))
+		n += snprintf(buf + n, sizeof(buf) - n, " (hunk %d + $%x)", h, off);
+	buf[n++] = '\n';
+	if (write(2, buf, n) < 0)
+		return;
+	n = snprintf(buf, sizeof(buf), "  d %x %x %x %x %x %x %x %x\n", (uint32_t)g[R_D0],
+		     (uint32_t)g[R_D0 + 1], (uint32_t)g[R_D0 + 2], (uint32_t)g[R_D0 + 3],
+		     (uint32_t)g[R_D0 + 4], (uint32_t)g[R_D0 + 5], (uint32_t)g[R_D0 + 6],
+		     (uint32_t)g[R_D0 + 7]);
+	if (write(2, buf, n) < 0)
+		return;
+	n = snprintf(buf, sizeof(buf), "  a %x %x %x %x %x %x %x %x\n", (uint32_t)g[R_A0],
+		     (uint32_t)g[R_A0 + 1], (uint32_t)g[R_A0 + 2], (uint32_t)g[R_A0 + 3],
+		     (uint32_t)g[R_A0 + 4], (uint32_t)g[R_A0 + 5], (uint32_t)g[R_A0 + 6],
+		     (uint32_t)g[R_SP]);
+	if (write(2, buf, n) < 0)
+		return;
 }
 
 static void map_page0(int allow)
@@ -466,6 +504,16 @@ int main(int argc, char **argv)
 	sigaction(SIGBUS, &sa, NULL);
 	sigaction(SIGILL, &sa, NULL);
 	sigaction(SIGFPE, &sa, NULL);
+	if (getenv("AMIGAFMT_HANGDUMP")) {
+		struct sigaction al;
+		struct itimerval it = { { atoi(getenv("AMIGAFMT_HANGDUMP")), 0 },
+					{ atoi(getenv("AMIGAFMT_HANGDUMP")), 0 } };
+		memset(&al, 0, sizeof(al));
+		al.sa_sigaction = on_alarm;
+		al.sa_flags = SA_SIGINFO | SA_RESTART;
+		sigaction(SIGALRM, &al, NULL);
+		setitimer(ITIMER_REAL, &it, NULL);
+	}
 
 	st = amem_alloc(stack + 64);
 	stack_lo = APTR_OF(st);

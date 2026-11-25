@@ -141,6 +141,9 @@ int main(u32 arglen, char *args)
 		call(GfxBase, LVOSetAPen, "a1d0", WIN_RP(bd), 1);
 		call(GfxBase, LVOMove, "a1d0d1", WIN_RP(bd), 4, 10);
 		call(GfxBase, LVOText, "a1a0d0", WIN_RP(bd), "backdrop", 8);
+		call(GfxBase, LVOSetAPen, "a1d0", WIN_RP(bd), 3);
+		call(GfxBase, LVOMove, "a1d0d1", WIN_RP(bd), 4, 14);
+		call(GfxBase, LVODraw, "a1d0d1", WIN_RP(bd), w / 2 - 4, h / 4 - 2);
 	}
 	i = 0;
 	wt[i++] = WA_CustomScreen; wt[i++] = (u32)s;

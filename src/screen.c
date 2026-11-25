@@ -10,22 +10,24 @@
  * windows on that screen.  Its palette is the ViewPort's ColorMap: every
  * SetRGB4/SetRGB32/LoadRGB4/LoadRGB32 on it goes to wbde at the next flush.
  *
- * How big a screen pixel is on the monitor is decided here, from the
- * ModeID, and wbde only centres the result (or scrolls it with the pointer
- * when it is bigger than the monitor): Amiga low resolution pixels are two
- * display pixels wide, high resolution one, super-high half; a screen that
- * is not interlaced has its rows shown twice.  Whole numbers, so no pixel
- * is ever wider than its neighbour, and none of the TV's odd aspect ratio:
- * an NTSC hires screen (640x200) is shown 640x400 on a 640x480 monitor,
- * exactly as wbde shows its own 640x240 Workbench.
+ * How big a screen pixel is on the monitor is wbde's choice by default:
+ * the largest whole scale at which the screen fits the monitor, the same
+ * on both axes so pixels stay square, centred with black round it; a
+ * 320x256 screen is 1280x1024 on a 1920x1200 panel.
+ * AMIGAFMT_SCREENSCALE=1 asks for 1:1, =modeid for the ModeID's own
+ * whole numbers (low resolution pixels two display pixels wide, high one,
+ * super-high half, rows doubled unless interlaced).
  *
  * The display database knows the NTSC and PAL modes an AGA Amiga has
  * except HAM (wbde screens are pens: HAM would need true colour), up to
  * 256 colours; DEFAULT_MONITOR_ID is NTSC.
  */
+#define _GNU_SOURCE
 #include <stdlib.h>
+#include <unistd.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/mman.h>
 #include "gui.h"
 
 #define TAG_USER        0x80000000u
@@ -215,6 +217,8 @@ static void g_NextDisplayInfo(struct frame *f)
 	RET(INVALID_ID);
 }
 
+static uint8_t *monitor_spec(int pal);
+
 static void g_GetDisplayInfoData(struct frame *f)
 {
 	uint8_t *b = PTR(A(1));
@@ -289,6 +293,7 @@ static void g_GetDisplayInfoData(struct frame *f)
 			*(int16_t *)(b + 76) = 1;
 			*(int16_t *)(b + 78) = 1;
 			*(uint32_t *)(b + 84) = monitor_of(id) | HIRES;
+			*(uint32_t *)(b + 16) = APTR_OF(monitor_spec(pal));    /* Mspc */
 		}
 		break;
 	case 0x80003000:                        /* DTAG_NAME: NameInfo */
@@ -344,6 +349,71 @@ int gfx_mode_info(uint32_t id, uint8_t *name, uint8_t *dims)
 	g_GetDisplayInfoData(&f);
 	return f.d[0] != 0;
 }
+
+/*
+ * OpenMonitor(name, displayID): a MonitorSpec (graphics/monitor.h) for
+ * ntsc.monitor or pal.monitor, enough for programs that read its ratios,
+ * row count and colour clocks.  160 bytes; one each, never freed.
+ */
+static uint8_t *ms[2];
+static uint8_t *make_spec(int pal);
+
+/* GfxBase->MonitorList (0x180) with both, default_monitor (0x18e) NTSC,
+   DisplayFlags (0xce) NTSC: offsets from the NDK's graphics/gfxbase.h */
+void gfx_monitors_init(void)
+{
+	extern void exec_addtail(void *l, void *n);
+	struct List *l = (struct List *)((uint8_t *)GfxBase + 0x180);
+
+	if (ms[0] || !GfxBase)
+		return;
+	l->lh_Head = APTR_OF(&l->lh_Tail);
+	l->lh_Tail = 0;
+	l->lh_TailPred = APTR_OF(&l->lh_Head);
+	ms[0] = make_spec(0);
+	ms[1] = make_spec(1);
+	exec_addtail(l, ms[0]);
+	exec_addtail(l, ms[1]);
+	*(uint32_t *)((uint8_t *)GfxBase + 0x18e) = APTR_OF(ms[0]);
+	*(uint16_t *)((uint8_t *)GfxBase + 0xce) = 1;          /* NTSC */
+}
+
+static uint8_t *monitor_spec(int pal)
+{
+	gfx_monitors_init();
+	return ms[pal];
+}
+
+static uint8_t *make_spec(int pal)
+{
+	uint8_t *m;
+
+	m = amem_alloc(160);
+	m[8] = 0;                                       /* ln_Type */
+	*(uint32_t *)(m + 10) = APTR_OF(pal ? "pal.monitor" : "ntsc.monitor");
+	*(int32_t *)(m + 26) = 16;                      /* ratioh: RATIO_UNITY */
+	*(int32_t *)(m + 30) = 16;                      /* ratiov */
+	*(uint16_t *)(m + 34) = pal ? 312 : 262;        /* total_rows */
+	*(uint16_t *)(m + 36) = 227;                    /* total_colorclocks */
+	*(uint16_t *)(m + 38) = 0xd8;                   /* DeniseMaxDisplayColumn */
+	*(uint16_t *)(m + 40) = pal ? 0x20 : 0;         /* BeamCon0: PAL */
+	*(uint16_t *)(m + 42) = pal ? 29 : 21;          /* min_row */
+	*(int16_t *)(m + 70) = 0x7fff;                  /* ms_LegalView */
+	*(int16_t *)(m + 72) = 0x7fff;
+	*(uint16_t *)(m + 82) = 0x18;                   /* DeniseMinDisplayColumn */
+	*(uint32_t *)(m + 84) = 1;                      /* MCOMPAT_SELF */
+	return m;
+}
+
+static void g_OpenMonitor(struct frame *f)
+{
+	const char *n = A(1) ? PTR(A(1)) : NULL;
+	int pal = n ? !strncasecmp(n, "pal", 3) : monitor_of(D(0)) == PAL_MONITOR_ID;
+
+	RET(monitor_spec(pal));
+}
+
+static void g_CloseMonitor(struct frame *f) { RET(0); }
 
 static void g_ModeNotAvailable(struct frame *f)
 {
@@ -598,11 +668,26 @@ static void g_GetVPModeID(struct frame *f)
 	RET(NTSC_MONITOR_ID | HIRES);
 }
 
+/*
+ * The copper and View side of graphics: wbde builds the display, so
+ * there is nothing to make, merge, load or free.  MakeVPort/MrgCop
+ * succeed, VideoControl accepts its tags (0 = done).
+ */
+static void g_DispZero(struct frame *f) { RET(0); }
+static void g_DispNop(struct frame *f) { (void)f; }
+
 const struct libimpl screen_gfx_impl[] = {
+	{ "FreeVPortCopLists", g_DispNop }, { "FreeCprList", g_DispNop },
+	{ "FreeCopList", g_DispNop }, { "MakeVPort", g_DispZero },
+	{ "MrgCop", g_DispZero }, { "LoadView", g_DispNop },
+	{ "InitVPort", g_DispNop }, { "InitView", g_DispNop },
+	{ "CBump", g_DispNop }, { "CMove", g_DispNop }, { "CWait", g_DispNop },
+	{ "VideoControl", g_DispZero }, { "ScrollVPort", g_DispNop },
 	{ "BestModeIDA", g_BestModeIDA }, { "FindDisplayInfo", g_FindDisplayInfo },
 	{ "NextDisplayInfo", g_NextDisplayInfo },
 	{ "GetDisplayInfoData", g_GetDisplayInfoData },
 	{ "ModeNotAvailable", g_ModeNotAvailable },
+	{ "OpenMonitor", g_OpenMonitor }, { "CloseMonitor", g_CloseMonitor },
 	{ "GetColorMap", g_GetColorMap }, { "FreeColorMap", g_FreeColorMap },
 	{ "SetRGB4", g_SetRGB4 }, { "SetRGB4CM", g_SetRGB4CM },
 	{ "SetRGB32", g_SetRGB32 }, { "SetRGB32CM", g_SetRGB32CM },
@@ -632,7 +717,7 @@ struct ascreen *as_by_rp(struct RastPort *rp)
 
 	for (as = gui_screens; as; as = as->next)
 		if (rp == &as->scr->RastPort ||
-		    (rp->BitMap && rp->BitMap == APTR_OF(&as->scr->BitMap) && !rp->Layer))
+		    (rp->BitMap && rp->BitMap == APTR_OF(&as->scr->BitMap)))
 			return as;
 	return NULL;
 }
@@ -656,12 +741,85 @@ void as_damage(struct ascreen *as, int x0, int y0, int x1, int y1)
 	if (y1 > as->dy1) as->dy1 = y1;
 }
 
+/*
+ * A write to a protected plane page (main.c's fault handler asks): the
+ * rows that page holds are to be converted, and the page is writable
+ * until the next flush.  Signal-safe: arithmetic and mprotect only.
+ */
+unsigned long screen_plane_faults;
+
+int screen_plane_fault(uint32_t addr)
+{
+	struct ascreen *as;
+	int p;
+
+	screen_plane_faults++;
+	for (as = gui_screens; as; as = as->next)
+		for (p = 0; p < as->depth; p++) {
+			uint32_t base = APTR_OF(as->planes[p]);
+			if (base && addr >= base && addr < base + as->planesize) {
+				uint32_t page = (addr - base) & ~4095u;
+				int y0 = page / as->bpr, y1 = (page + 4095) / as->bpr;
+				if (y1 >= as->h)
+					y1 = as->h - 1;
+				if (y0 < as->conv_y0)
+					as->conv_y0 = y0;
+				if (y1 > as->conv_y1)
+					as->conv_y1 = y1;
+				mprotect(as->planes[p] + page, 4096, PROT_READ | PROT_WRITE);
+				return 1;
+			}
+		}
+	return 0;
+}
+
+/* graphics drew rows y0..y1 (through the alias) */
+void as_rows_drawn(struct ascreen *as, int y0, int y1)
+{
+	if (y0 < as->conv_y0)
+		as->conv_y0 = y0;
+	if (y1 > as->conv_y1)
+		as->conv_y1 = y1;
+}
+
+/* planar rows y0..y1 into the screen's buffer of pens, protected again */
+static void convert(struct ascreen *as)
+{
+	int y0 = as->conv_y0, y1 = as->conv_y1, y, bx, p, d = as->depth;
+
+	if (y0 > y1)
+		return;
+	as->conv_y0 = 1 << 30;
+	as->conv_y1 = -1;
+	mprotect(as->planes[0], as->planesize * d, PROT_READ);
+	for (y = y0; y <= y1; y++) {
+		uint8_t *o = as->pix + (size_t)y * as->stride;
+		const uint8_t *row[8];
+		for (p = 0; p < d; p++)
+			row[p] = as->alias[p] + (size_t)y * as->bpr;
+		for (bx = 0; bx < as->bpr && bx * 8 < as->w; bx++) {
+			uint8_t px[8] = { 0 };
+			int b, n = as->w - bx * 8 < 8 ? as->w - bx * 8 : 8;
+			for (p = 0; p < d; p++) {
+				uint8_t v = row[p][bx];
+				if (!v)
+					continue;
+				for (b = 0; b < 8; b++)
+					px[b] |= ((v >> (7 - b)) & 1) << p;
+			}
+			memcpy(o + bx * 8, px, n);
+		}
+	}
+	as_damage(as, 0, y0, as->w - 1, y1);
+}
+
 /* the screens' damage and palette changes to wbde, before a wait */
 void as_flush(void)
 {
 	struct ascreen *as;
 
 	for (as = gui_screens; as; as = as->next) {
+		convert(as);
 		if (as->pal_lo >= 0) {
 			int n = as->pal_hi - as->pal_lo + 1;
 			uint8_t buf[4 + 256 * 3];
@@ -820,7 +978,15 @@ static struct Screen *open_screen(struct sspec *sp)
 		if (h <= 0)
 			h = nh;
 	}
-	mode_scale(id, &sxn, &sxd, &syn, &syd);
+	/* wbde's choice (the largest whole scale that fits the monitor,
+	   square pixels, centred); AMIGAFMT_SCREENSCALE=modeid asks for the
+	   ModeID's own as described at the top, =1 for 1:1 */
+	if (getenv("AMIGAFMT_SCREENSCALE") && !strcmp(getenv("AMIGAFMT_SCREENSCALE"), "modeid"))
+		mode_scale(id, &sxn, &sxd, &syn, &syd);
+	else if (getenv("AMIGAFMT_SCREENSCALE") && !strcmp(getenv("AMIGAFMT_SCREENSCALE"), "1"))
+		sxn = sxd = syn = syd = 1;
+	else
+		sxn = syn = 0, sxd = syd = 1;
 
 	memset(&ns, 0, sizeof(ns));
 	ns.width = w;
@@ -950,9 +1116,32 @@ static struct Screen *open_screen(struct sspec *sp)
 		s->BitMap.BytesPerRow = ((w + 15) / 16) * 2;
 		s->BitMap.Rows = h;
 		s->BitMap.Depth = d;
-		/* planes, for programs that look; drawing goes to wbde's buffer */
-		for (i = 0; i < d; i++)
-			s->BitMap.Planes[i] = APTR_OF(amem_alloc(s->BitMap.BytesPerRow * h));
+		/* the planes are the screen's pixels (see as_flush) */
+		as->bpr = s->BitMap.BytesPerRow;
+		as->planesize = ((size_t)as->bpr * h + 4095) & ~(size_t)4095;
+		as->conv_y0 = 1 << 30;
+		as->conv_y1 = -1;
+		/* one memfd mapped twice: the program's view, write protected
+		   so that its writes are noticed, and amigafmt's, writable
+		   (graphics draws there and says which rows itself) */
+		{
+			int fd = memfd_create("amigafmt-planes", MFD_CLOEXEC);
+			size_t all = as->planesize * d;
+			uint8_t *a = MAP_FAILED, *b = MAP_FAILED;
+
+			if (fd >= 0 && !ftruncate(fd, all)) {
+				a = mmap(NULL, all, PROT_READ, MAP_SHARED, fd, 0);
+				b = mmap(NULL, all, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+			}
+			if (fd >= 0)
+				close(fd);
+			for (i = 0; i < d; i++) {
+				as->planes[i] = a == MAP_FAILED || b == MAP_FAILED ? NULL :
+						a + i * as->planesize;
+				as->alias[i] = as->planes[i] ? b + i * as->planesize : NULL;
+				s->BitMap.Planes[i] = APTR_OF(as->planes[i]);
+			}
+		}
 	}
 	gfx_init_rp(&s->RastPort);
 	s->RastPort.BitMap = APTR_OF(&s->BitMap);
@@ -1071,6 +1260,12 @@ static void i_CloseScreen(struct frame *f)
 			break;
 		}
 	gui_unmap(as->pix, as->size);
+	{
+		if (as->planes[0]) {
+			munmap(as->planes[0], as->planesize * as->depth);
+			munmap(as->alias[0], as->planesize * as->depth);
+		}
+	}
 	relink();
 	if (*(uint32_t *)((uint8_t *)IntuitionBase + 56) == APTR_OF(as->scr))
 		*(uint32_t *)((uint8_t *)IntuitionBase + 56) =

@@ -25,6 +25,7 @@ struct surf {
 	int cx0, cy0, cx1, cy1;         /* clip, surface coords */
 	struct awin *a;
 	struct ascreen *sc;             /* a custom screen's own pixels */
+	struct BitMap scbm;             /* its BitMap with the writable aliases */
 	int pmask;                      /* pens a chunky surface can hold */
 	int any, bx0, by0, bx1, by1;
 	int16_t *rects;                 /* a layer's clip region, rp coords */
@@ -122,9 +123,11 @@ static int surf_open(struct RastPort *rp, struct surf *s)
 	memset(s, 0, sizeof(*s));
 	if (!rp)
 		return 0;
+	if (a && a->root)
+		a = NULL;               /* a screen's backdrop: the screen's pixels */
 	if (!a && rp->BitMap)
 		for (a = gui_wins; a; a = a->next)
-			if (APTR_OF(a->bm) == rp->BitMap)
+			if (!a->root && APTR_OF(a->bm) == rp->BitMap)
 				break;
 	s->pmask = 0xff;
 	if (a) {
@@ -153,13 +156,33 @@ static int surf_open(struct RastPort *rp, struct surf *s)
 		if (as) {
 			if (!as->pix)
 				return 0;
+			/* through its planes, which are its pixels: the
+			   writable aliases, and the rows drawn are told */
+			int i;
 			s->sc = as;
-			s->pix = as->pix;
-			s->stride = as->stride;
+			s->scbm = as->scr->BitMap;
+			for (i = 0; i < as->depth; i++)
+				s->scbm.Planes[i] = APTR_OF(as->alias[i]);
+			s->bm = &s->scbm;
 			s->depth = as->depth;
-			s->pmask = (1 << as->depth) - 1;
 			s->cx1 = as->w - 1;
 			s->cy1 = as->h - 1;
+			if (rp->Layer) {
+				/* a layer on the screen (a backdrop window's):
+				   its coordinates, clipped to its bounds */
+				int16_t *b = (int16_t *)((uint8_t *)PTR(rp->Layer) + 16);
+				s->ox = -b[0];
+				s->oy = -b[1];
+				if (b[0] > s->cx0) s->cx0 = b[0];
+				if (b[1] > s->cy0) s->cy0 = b[1];
+				if (b[2] < s->cx1) s->cx1 = b[2];
+				if (b[3] < s->cy1) s->cy1 = b[3];
+				if (layer_region(rp->Layer)) {
+					struct rgn *g = rgn_of(layer_region(rp->Layer));
+					s->rects = g->r;
+					s->nrects = g->n ? g->n : -1;
+				}
+			}
 			return 1;
 		}
 	}
@@ -193,7 +216,7 @@ static void surf_close(struct surf *s)
 	if (s->a && s->any)
 		gui_damage(s->a, s->bx0, s->by0, s->bx1, s->by1);
 	if (s->sc && s->any)
-		as_damage(s->sc, s->bx0, s->by0, s->bx1, s->by1);
+		as_rows_drawn(s->sc, s->by0, s->by1);
 }
 
 static inline void touch(struct surf *s, int x0, int y0, int x1, int y1)
@@ -357,15 +380,22 @@ static void line_s(struct surf *s, struct RastPort *rp, int x0, int y0, int x1, 
 	uint16_t pat = rp->LinePtrn ? rp->LinePtrn : 0xffff;
 	int n = 0;
 
+	int steps = dx - dy + 1, e2;
+
 	for (;;) {
 		plot(s, rp, x0, y0, (pat >> (15 - (n++ & 15))) & 1);
 		if (x0 == x1 && y0 == y1)
 			break;
-		if (2 * e >= dy) {
+		if (n > steps)          /* cannot happen; never loop for ever on it */
+			break;
+		/* both tests on the error before either step: testing the second
+		   on the updated error can skip the end point */
+		e2 = 2 * e;
+		if (e2 >= dy) {
 			e += dy;
 			x0 += sx;
 		}
-		if (2 * e <= dx) {
+		if (e2 <= dx) {
 			e += dx;
 			y0 += sy;
 		}
@@ -1435,6 +1465,55 @@ static void g_WriteChunkyPixels(struct frame *f)
 /* ---- colours: the Workbench palette, read only ---- */
 
 
+/*
+ * BitMapScale(struct BitScaleArgs *): nearest-neighbour, any BitMap a
+ * RastPort can draw on (planar, a window's, a screen's).  Writes back
+ * bsa_DestWidth/Height as graphics does.
+ */
+static void g_BitMapScale(struct frame *f)
+{
+	uint16_t *b = PTR(A(0));
+	struct RastPort srp, drp;
+	struct surf ss, ds;
+	int sx0 = b[0], sy0 = b[1], sw = b[2], sh = b[3];
+	int xsf = b[4] ? b[4] : 1, ysf = b[5] ? b[5] : 1;
+	int dx0 = b[6], dy0 = b[7], xdf = b[10], ydf = b[11];
+	int dw = sw * xdf / xsf, dh = sh * ydf / ysf, x, y;
+
+	b[8] = dw;
+	b[9] = dh;
+	gfx_init_rp(&srp);
+	gfx_init_rp(&drp);
+	srp.BitMap = *(uint32_t *)(b + 12);
+	drp.BitMap = *(uint32_t *)(b + 14);
+	if (!dw || !dh || !surf_open(&srp, &ss))
+		return;
+	if (!surf_open(&drp, &ds))
+		return;
+	for (y = 0; y < dh; y++) {
+		int py = dy0 + y, qy = sy0 + y * sh / dh;
+		if (py < ds.cy0 || py > ds.cy1 || qy < ss.cy0 || qy > ss.cy1)
+			continue;
+		for (x = 0; x < dw; x++) {
+			int px = dx0 + x, qx = sx0 + x * sw / dw;
+			if (px < ds.cx0 || px > ds.cx1 || qx < ss.cx0 || qx > ss.cx1)
+				continue;
+			sset(&ds, px, py, sget(&ss, qx, qy));
+		}
+	}
+	touch(&ds, dx0, dy0, dx0 + dw - 1, dy0 + dh - 1);
+	surf_close(&ds);
+}
+
+/* ScalerDiv(factor, numerator, denominator) */
+static void g_ScalerDiv(struct frame *f)
+{
+	uint32_t d = D(2) & 0xffff;
+	uint32_t r = d ? ((D(0) & 0xffff) * (D(1) & 0xffff) + d / 2) / d : 0;
+
+	RET(r ? r : ((D(0) & 0xffff) ? 1 : 0));
+}
+
 static void g_WaitTOF(struct frame *f)
 {
 	gui_flush();
@@ -1775,6 +1854,7 @@ static const struct libimpl gfx_impl[] = {
 	{ "ReadPixelLine8", g_ReadPixelLine8 },
 	{ "WriteChunkyPixels", g_WriteChunkyPixels },
 	{ "ReleasePen", g_Nop },
+	{ "BitMapScale", g_BitMapScale }, { "ScalerDiv", g_ScalerDiv },
 	{ "WaitTOF", g_WaitTOF }, { "WaitBlit", g_Nop },
 	{ "OwnBlitter", g_Nop }, { "DisownBlitter", g_Nop },
 	{ "VBeamPos", g_Zero }, { "WaitBOVP", g_Nop },
@@ -1793,7 +1873,10 @@ static const struct libimpl gfx_impl[] = {
 
 static void gfx_setup(struct Library *b)
 {
+	extern void gfx_monitors_init(void);
+
 	GfxBase = b;            /* DefaultFont is set when wbde gives topaz */
+	gfx_monitors_init();
 }
 
 extern const struct libimpl screen_gfx_impl[];
