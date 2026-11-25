@@ -63,7 +63,7 @@ struct amilib {
 extern struct amilib lib_exec, lib_dos, lib_utility, lib_version,
 	lib_intuition, lib_graphics, lib_gadtools, lib_mathieeedoubbas,
 	lib_mathieeedoubtrans, lib_mathieeesingbas, lib_mathieeesingtrans,
-	lib_mathffp, lib_mathtrans, lib_timer;
+	lib_mathffp, lib_mathtrans, lib_timer, lib_layers;
 extern struct amilib *all_libs[];
 
 struct Library *lib_build(struct amilib *l);

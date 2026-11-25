@@ -24,7 +24,7 @@ struct amilib *all_libs[] = { &lib_exec, &lib_dos, &lib_utility,
 			      &lib_gadtools, &lib_mathieeedoubbas,
 			      &lib_mathieeedoubtrans, &lib_mathieeesingbas,
 			      &lib_mathieeesingtrans, &lib_mathffp,
-			      &lib_mathtrans, &lib_timer,
+			      &lib_mathtrans, &lib_timer, &lib_layers,
 			      NULL };
 struct frame *resume_frame;
 int dispatch_all_regs;
@@ -236,7 +236,7 @@ struct frame *amiga_dispatch(struct frame *f)
 
 	if (!fn)
 		unimplemented(l, slot, f);
-	uint32_t keep[11];
+	uint32_t keep[11], fpcr;
 
 	resume_frame = f;
 	if (af_trace)
@@ -247,7 +247,15 @@ struct frame *amiga_dispatch(struct frame *f)
 	memcpy(keep + 6, &f->a[2], 5 * 4);
 	exec_pending_break();
 	dispatch_all_regs = 0;
+	/* the program's FPU control register (SAS/C sets single precision)
+	   must not leak into our libm: C runs with the default, and the
+	   program gets its own back */
+	__asm__ volatile("fmove.l %%fpcr,%0" : "=d"(fpcr));
+	if (fpcr)
+		__asm__ volatile("fmove.l %0,%%fpcr" : : "d"(0));
 	fn(f);
+	if (fpcr)
+		__asm__ volatile("fmove.l %0,%%fpcr" : : "d"(fpcr));
 	if (!dispatch_all_regs) {
 		memcpy(&f->d[2], keep, 6 * 4);
 		memcpy(&f->a[2], keep + 6, 5 * 4);

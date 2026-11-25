@@ -330,6 +330,7 @@ static void build_screen(void)
 	s->BitMap.BytesPerRow = g->width / 8;
 	s->BitMap.Rows = g->height;
 	s->BitMap.Depth = g->depth;
+	gfx_init_rp(&s->RastPort);
 	s->RastPort.BitMap = APTR_OF(&s->BitMap);
 	s->DetailPen = g->pens[WBP_DETAILPEN];
 	s->BlockPen = g->pens[WBP_BLOCKPEN];
@@ -388,6 +389,8 @@ int gui_connect(void)
 		return -1;
 	}
 	build_screen();
+	if (GfxBase)    /* GfxBase->DefaultFont, offset 154 */
+		*(uint32_t *)((uint8_t *)GfxBase + 154) = APTR_OF(gui_topaz);
 	return 0;
 }
 

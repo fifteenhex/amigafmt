@@ -35,6 +35,7 @@ extern struct TextFont *gui_topaz;
 extern struct TextAttr *gui_topaz_attr;
 extern struct DrawInfo *gui_dri;
 extern uint16_t gui_pens[16];
+extern struct Library *GfxBase;
 
 int gui_connect(void);
 int gui_fd(void);
@@ -47,5 +48,20 @@ int gui_pump(int timeout_ms);
 int gui_obtain_pen(uint8_t r, uint8_t g, uint8_t b);
 struct awin *gui_by_window(APTR w);
 struct awin *gui_by_rp(APTR rp);
+
+/* gfx.c: drawing on a RastPort */
+void gfx_rectfill(struct RastPort *rp, int x0, int y0, int x1, int y1, int pen);
+void gfx_text(struct RastPort *rp, const char *s, int n);
+int gfx_textlength(struct RastPort *rp, const char *s, int n);
+void gfx_line(struct RastPort *rp, int x0, int y0, int x1, int y1);
+void gfx_pixel(struct RastPort *rp, int x, int y, int pen);
+void gfx_complement(struct RastPort *rp, int x0, int y0, int x1, int y1);
+void gfx_drawimage(struct RastPort *rp, struct Image *im, int x, int y);
+void gfx_drawborder(struct RastPort *rp, struct Border *b, int x, int y);
+void gfx_printitext(struct RastPort *rp, struct IntuiText *it, int x, int y);
+int gfx_itextlength(struct IntuiText *it);
+void gfx_init_rp(struct RastPort *rp);
+void gfx_bevel(struct RastPort *rp, int x, int y, int w, int h, int recessed);
+struct TextFont *gfx_font_for(struct TextAttr *ta);
 
 #endif

@@ -156,19 +156,12 @@ struct amilib lib_intuition = {
 };
 
 /*
- * graphics.library and gadtools.library: the bases only, so programs
- * that open them to read GfxBase or for an optional feature start (lha
- * opens both); any call stops the program with its name.  amitools has
- * no gadtools_lib.fd, so its vectors have no names here and an
- * unimplemented call is reported by offset alone.
+ * gadtools.library: the base only, so programs that open it for an
+ * optional feature start (lha does); any call stops the program.
+ * amitools has no gadtools_lib.fd, so its vectors have no names here
+ * and an unimplemented call is reported by offset alone.
  */
 struct amilib lib_gadtools = {
 	.name = "gadtools.library", .version = 40, .revision = 4,
 	.minslots = 32, .possize = 8,
-};
-
-struct amilib lib_graphics = {
-	.name = "graphics.library", .version = 40, .revision = 42,
-	.fd = fd_graphics, .impl = NULL,
-	.possize = 0x300,               /* GfxBase, all zero */
 };
