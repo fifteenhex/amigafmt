@@ -248,6 +248,8 @@ static void render_one(struct awin *a, struct Gadget *g)
 
 	if (g->GadgetType & GTYP_SYSGADGET)
 		return;
+	if (gt_render(a, g))
+		return;
 	gbox(a, g, &x, &y, &w, &h);
 	if (type == GTYP_PROPGADGET) {
 		render_prop(a, g, x, y, w, h);
@@ -427,6 +429,8 @@ void intui_event(struct awin *a, const struct wbp_event *e)
 				int type = g->GadgetType & GTYP_GTYPEMASK;
 				a->agad = g;
 				a->agad_in = 1;
+				if (gt_handle_down(a, g, mx, my))
+					return;
 				if (type == GTYP_STRGADGET) {
 					struct StringInfo *si = PTR(g->SpecialInfo);
 					a->strgad = g;
@@ -459,6 +463,8 @@ void intui_event(struct awin *a, const struct wbp_event *e)
 			struct Gadget *g = a->agad;
 			int in = inside(a, g, mx, my);
 			a->agad = NULL;
+			if (gt_handle_up(a, g, mx, my, in))
+				return;
 			if ((g->GadgetType & GTYP_GTYPEMASK) == GTYP_PROPGADGET) {
 				g->Flags &= ~GFLG_SELECTED;
 				render_one(a, g);
@@ -482,6 +488,8 @@ void intui_event(struct awin *a, const struct wbp_event *e)
 		if (a->agad) {
 			struct Gadget *g = a->agad;
 			int in = inside(a, g, mx, my);
+			if (gt_handle_move(a, g, mx, my))
+				return;
 			if ((g->GadgetType & GTYP_GTYPEMASK) == GTYP_PROPGADGET)
 				prop_set(a, g, mx, my);
 			else if (in != a->agad_in &&
@@ -506,6 +514,8 @@ void intui_event(struct awin *a, const struct wbp_event *e)
 			return;
 		if (a->strgad && (e->code & 0x80))
 			return;
+		if (a->agad && gt_key(a, a->agad, 0, e->code, e->qualifier))
+			return;
 		if (!(e->code & 0x80) && (w->IDCMPFlags & IDCMP_VANILLAKEY)) {
 			a->raw = *e;            /* a VANILLAKEY may follow */
 			a->raw_pending = 1;
@@ -517,6 +527,8 @@ void intui_event(struct awin *a, const struct wbp_event *e)
 		a->raw_pending = 0;
 		if (a->strgad)
 			return;         /* the RAWKEY did the editing */
+		if (gt_key(a, NULL, e->code, -1, e->qualifier))
+			return;
 		put_imsg(a, IDCMP_VANILLAKEY, e->code, e->qualifier, 0, mx, my);
 		return;
 	case IDCMP_MENUPICK: {

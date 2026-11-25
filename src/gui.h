@@ -71,4 +71,12 @@ void gfx_init_rp(struct RastPort *rp);
 void gfx_bevel(struct RastPort *rp, int x, int y, int w, int h, int recessed);
 struct TextFont *gfx_font_for(struct TextAttr *ta);
 
+/* gadtools.c: its gadgets inside Intuition's input handling */
+int gt_handle_down(struct awin *a, struct Gadget *g, int x, int y);
+int gt_handle_up(struct awin *a, struct Gadget *g, int x, int y, int inside);
+int gt_handle_move(struct awin *a, struct Gadget *g, int x, int y);
+int gt_render(struct awin *a, struct Gadget *g);
+int gt_is_ours(struct Gadget *g);
+int gt_key(struct awin *a, struct Gadget *g, int ch, int raw, int qual);
+
 #endif
