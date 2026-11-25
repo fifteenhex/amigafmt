@@ -340,7 +340,13 @@ void io_DoIO(struct frame *f)
 {
 	struct ioreq *io = PTR(A(1));
 
+	extern int console_io(void *io);
+
 	if (!is_timer(io)) {
+		if (console_io(io)) {
+			RET(io->io_Error);
+			return;
+		}
 		af_die("%s: DoIO() on a device amigafmt does not provide",
 		       af_progname);
 	}
@@ -353,9 +359,17 @@ void io_SendIO(struct frame *f)
 {
 	struct ioreq *io = PTR(A(1));
 
-	if (!is_timer(io))
+	extern int console_io(void *io);
+
+	if (!is_timer(io)) {
+		if (console_io(io)) {
+			io->io_Flags &= ~IOF_QUICK;
+			complete(io);
+			return;
+		}
 		af_die("%s: SendIO() on a device amigafmt does not provide",
 		       af_progname);
+	}
 	io->io_Flags &= ~IOF_QUICK;
 	begin_io(io);
 }
