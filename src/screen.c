@@ -56,6 +56,8 @@
 
 struct ascreen *gui_screens;
 extern struct Library *IntuitionBase;
+extern struct TextFont *diskfont_open(const char *name, int ysize);
+extern struct TextFont *diskfont_find(const char *name, int ysize, int exact);
 extern struct TagItem *util_next_tag(struct TagItem **tp);
 
 /* ---- the display database ---- */
@@ -675,10 +677,17 @@ static const uint16_t newlook[WBP_NUMPENS] = {
 	0, 1, 1, 2, 1, 3, 1, 0, 2, 1, 2, 1
 };
 
-/* the screen's font: topaz, until diskfont provides others */
+/* the screen's font: what it asked for (memory, then disk), else topaz */
 static struct TextFont *screen_font(struct TextAttr *ta)
 {
-	return gui_topaz;
+	struct TextFont *tf = NULL;
+
+	if (ta && ta->ta_Name) {
+		tf = diskfont_find(PTR(ta->ta_Name), ta->ta_YSize, 1);
+		if (!tf)
+			tf = diskfont_open(PTR(ta->ta_Name), ta->ta_YSize);
+	}
+	return tf ? tf : gui_topaz;
 }
 
 struct sspec {

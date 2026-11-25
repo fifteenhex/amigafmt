@@ -386,6 +386,7 @@ void gfx_line(struct RastPort *rp, int x0, int y0, int x1, int y1)
 
 /* ---- text ---- */
 
+extern struct TextFont *diskfont_find(const char *name, int ysize, int exact);
 
 static int is_topaz(const char *n)
 {
@@ -396,14 +397,14 @@ static int is_topaz(const char *n)
 	return !strcasecmp(p ? p + 1 : n, "topaz.font");
 }
 
-/* a font in memory (topaz from wbde), else NULL */
+/* a font in memory (topaz from wbde, or one diskfont loaded), else NULL */
 static struct TextFont *font_in_memory(struct TextAttr *ta)
 {
 	if (!gui_topaz)
 		gui_connect();
 	if (!ta || !ta->ta_Name || is_topaz(PTR(ta->ta_Name)))
 		return gui_topaz;
-	return NULL;
+	return diskfont_find(PTR(ta->ta_Name), ta->ta_YSize, 0);
 }
 
 /* for drawing: the font asked for if it is in memory, else topaz */
