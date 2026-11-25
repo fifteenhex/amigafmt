@@ -528,6 +528,10 @@ int main(int argc, char **argv)
 			APTR_OF(SysBase), page0 ? "mapped (page 0)" :
 			"emulated (SIGSEGV)");
 	dos_init(argc - optind - 1, argv + optind + 1, prog, the_seg, stack);
+	{
+		extern void task_init(void);
+		task_init();
+	}
 
 	memset(&ss, 0, sizeof(ss));
 	ss.ss_size = 65536;

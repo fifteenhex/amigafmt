@@ -284,6 +284,16 @@ static void e_DeletePool(struct frame *f)
 
 /* ---- tasks and signals ---- */
 
+static int in_interrupt;         /* interrupt code: no task switches */
+
+extern uint32_t task_wait(uint32_t mask);
+extern void task_signal(struct Task *t, uint32_t sigs, int may_switch);
+extern struct Task *task_current(void), *task_find(const char *name);
+extern void task_remove(struct Task *t);
+struct atask;
+extern struct atask *task_add(struct Task *t, uint32_t initpc, uint32_t finalpc,
+			      void (*cstart)(struct atask *));
+
 static void on_signal(int sig)
 {
 	uint32_t bit = sig == SIGINT ? SIGBREAKF_CTRL_C :
@@ -311,11 +321,7 @@ static void e_FindTask(struct frame *f)
 {
 	const char *n = PTR(A(1));
 
-	if (!n || (me->pr_Task.tc_Node.ln_Name &&
-		   !strcmp(n, PTR(me->pr_Task.tc_Node.ln_Name))))
-		RET(me);
-	else
-		RET(0);
+	RET(n ? task_find(n) : task_current());
 }
 
 static void e_SetTaskPri(struct frame *f)
@@ -363,16 +369,126 @@ static int64_t mono_us(void)
 	return (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
 }
 
-static int wait_events(uint32_t mask)
+static uint32_t native_vblank_sp(void)
+{
+	static uint8_t *stack;
+
+	if (!stack)
+		stack = amem_alloc(16384);
+	return APTR_OF(stack + 16384 - 16);
+}
+
+/*
+ * Interrupt servers (AddIntServer): the vertical blank ones (INTB_VERTB,
+ * 5) run 50 times a second while the program waits, with a1 = is_Data,
+ * a5 = is_Code, a6 = SysBase, as exec calls them; the others are kept
+ * and never called (there are no such interrupts here).
+ */
+#define MAXINTS 16
+static struct { int num; uint32_t is; } ints[MAXINTS];
+static int nints, nvertb;
+static int64_t last_vblank;
+
+static void e_AddIntServer(struct frame *f)
+{
+	if (nints < MAXINTS) {
+		ints[nints].num = D(0);
+		ints[nints].is = A(1);
+		nints++;
+		nvertb += D(0) == 5;
+	}
+}
+
+static void e_RemIntServer(struct frame *f)
+{
+	int i;
+
+	for (i = 0; i < nints; i++)
+		if (ints[i].is == A(1) && ints[i].num == (int)D(0)) {
+			nvertb -= ints[i].num == 5;
+			ints[i] = ints[--nints];
+			return;
+		}
+}
+
+/* run the vertical blank servers if one is due; microseconds to the next */
+static int64_t vblank(void)
+{
+	int64_t now = mono_us();
+	int i;
+
+	if (!nvertb)
+		return -1;
+	if (now - last_vblank >= 20000) {
+		last_vblank = now;
+		for (i = 0; i < nints; i++)
+			if (ints[i].num == 5) {
+				uint8_t *is = PTR(ints[i].is);
+				struct regs r;
+				memset(&r, 0, sizeof(r));
+				r.a[1] = *(uint32_t *)(is + 14);
+				r.a[5] = *(uint32_t *)(is + 18);
+				r.a[6] = APTR_OF(SysBase);
+				r.a[7] = native_vblank_sp();
+				in_interrupt++;
+				call_amiga(&r, r.a[5]);
+				in_interrupt--;
+			}
+		now = mono_us();
+	}
+	return 20000 - (now - last_vblank);
+}
+
+/*
+ * Sleep for us microseconds the way a task blocked in WaitTOF() or
+ * Delay() does: other tasks run meanwhile (a program that polls another
+ * task with WaitTOF in a loop needs that), wbde's events and timer.device
+ * keep being served, vertical blank servers keep running.
+ */
+void exec_sleep(int64_t us)
+{
+	extern void task_yield(void);
+	int64_t end = mono_us() + us, left;
+
+	for (;;) {
+		task_yield();
+		left = end - mono_us();
+		if (left <= 0)
+			break;
+		gui_flush();
+		dos_flush_all();
+		{
+			int64_t vb = vblank(), t = timer_poll();
+			int fd = gui_fd();
+
+			if (vb >= 0 && vb < left)
+				left = vb > 0 ? vb : 1;
+			if (t >= 0 && t < left)
+				left = t > 0 ? t : 1;
+			if (fd >= 0) {
+				struct pollfd p = { fd, POLLIN, 0 };
+				if (poll(&p, 1, (int)((left + 999) / 1000)) > 0)
+					gui_pump(0);
+			} else
+				timer_sleep(left);
+			timer_poll();
+		}
+	}
+}
+
+int exec_wait_events(uint32_t mask)
 {
 	static int64_t last_tick;
-	int64_t us = timer_poll(), now;
+	int64_t us = timer_poll(), now, vb;
 	int ticks = intui_wants_ticks(), fd = gui_fd();
 
 	gui_flush();
 	dos_flush_all();
 	if (us == 0)
 		return 1;
+	vb = vblank();
+	if (vb >= 0 && (us < 0 || us > vb))
+		us = vb > 0 ? vb : 1;
 	if (ticks) {
 		now = mono_us();
 		if (now - last_tick >= 100000) {
@@ -402,32 +518,26 @@ static int wait_events(uint32_t mask)
 	return 0;
 }
 
+
 static void e_Wait(struct frame *f)
 {
-	struct Task *t = &me->pr_Task;
-	uint32_t mask = D(0), got;
-
-	for (;;) {
-		exec_pending_break();
-		got = t->tc_SigRecvd & mask;
-		if (got) {
-			t->tc_SigRecvd &= ~got;
-			RET(got);
-			return;
-		}
-		if (!wait_events(mask)) {
-			dos_flush_all();
-			af_die("%s: Wait($%x) for a signal nothing can send "
-			       "(single task); stopping", af_progname, mask);
-		}
-	}
+	RET(task_wait(D(0)));
 }
 
 static void e_Signal(struct frame *f)
 {
+	task_signal(PTR(A(1)), D(0), !in_interrupt);
+}
+
+static void e_AddTask(struct frame *f)
+{
 	struct Task *t = PTR(A(1));
 
-	t->tc_SigRecvd |= D(0);
+	if (!task_add(t, A(2), A(3), NULL)) {
+		RET(0);
+		return;
+	}
+	RET(t);
 }
 
 static void e_AllocSignal(struct frame *f)
@@ -466,9 +576,7 @@ static void e_Zero(struct frame *f) { RET(0); }
 
 static void e_RemTask(struct frame *f)
 {
-	if (!A(1) || A(1) == APTR_OF(me))
-		dos_exit(0);
-	af_die("RemTask() of another task");
+	task_remove(A(1) ? PTR(A(1)) : NULL);
 }
 
 static void e_Alert(struct frame *f)
@@ -514,11 +622,23 @@ void exec_putmsg(struct MsgPort *p, struct Message *m)
 	m->mn_Node.ln_Type = NT_MESSAGE;
 	addtail(&p->mp_MsgList, &m->mn_Node);
 	if ((p->mp_Flags & 3) == 0 && p->mp_SigTask)
-		((struct Task *)PTR(p->mp_SigTask))->tc_SigRecvd |=
-			1u << p->mp_SigBit;
+		task_signal(PTR(p->mp_SigTask), 1u << p->mp_SigBit, 0);
 }
 
-static void e_PutMsg(struct frame *f) { putmsg(PTR(A(0)), PTR(A(1))); }
+/* after a message from Amiga code: its receiver may be due to run */
+static void msg_sent(struct MsgPort *p)
+{
+	if (in_interrupt)
+		return;
+	if (p && (p->mp_Flags & 3) == 0 && p->mp_SigTask)
+		task_signal(PTR(p->mp_SigTask), 0, 1);
+}
+
+static void e_PutMsg(struct frame *f)
+{
+	putmsg(PTR(A(0)), PTR(A(1)));
+	msg_sent(PTR(A(0)));
+}
 
 /* a program polling its window's port still gets wbde's events */
 struct Node *exec_getmsg(struct MsgPort *p)
@@ -548,7 +668,15 @@ void exec_reply(struct Message *m)
 		m->mn_Node.ln_Type = 6;         /* NT_FREEMSG */
 }
 
-static void e_ReplyMsg(struct frame *f) { exec_reply(PTR(A(1))); }
+static void e_ReplyMsg(struct frame *f)
+{
+	struct Message *m = PTR(A(1));
+	uint32_t port = m ? m->mn_ReplyPort : 0;
+
+	exec_reply(m);
+	if (port)
+		msg_sent(PTR(port));
+}
 
 static void e_WaitPort(struct frame *f)
 {
@@ -556,9 +684,11 @@ static void e_WaitPort(struct frame *f)
 
 	while (!N(p->mp_MsgList.lh_Head)->ln_Succ) {
 		exec_pending_break();
-		if (!wait_events(0))
+		if ((p->mp_Flags & 3) == 0 && p->mp_SigTask == APTR_OF(task_current()))
+			task_wait(1u << p->mp_SigBit);
+		else if (!exec_wait_events(0))
 			af_die("%s: WaitPort() on an empty port would wait "
-			       "forever (single task); stopping", af_progname);
+			       "forever; stopping", af_progname);
 	}
 	RET(p->mp_MsgList.lh_Head);
 }
@@ -752,13 +882,12 @@ static void e_TaggedOpenLibrary(struct frame *f)
 }
 
 /* InitStruct(initTable, memory, size): the exec.library table format */
-static void e_InitStruct(struct frame *f)
+void exec_initstruct(const uint8_t *t, uint8_t *base, uint32_t size)
 {
-	const uint8_t *t = PTR(A(1));
-	uint8_t *base = PTR(A(2)), *dst = base;
+	uint8_t *dst = base;
 
-	if (D(0))
-		memset(base, 0, D(0) & 0xffff);
+	if (size)
+		memset(base, 0, size & 0xffff);
 	for (;;) {
 		uint8_t cmd = *t++;
 		int what = cmd >> 6, size = (cmd >> 4) & 3, cnt = (cmd & 15) + 1;
@@ -788,6 +917,11 @@ static void e_InitStruct(struct frame *f)
 		if ((uintptr_t)t & 1)
 			t++;
 	}
+}
+
+static void e_InitStruct(struct frame *f)
+{
+	exec_initstruct(PTR(A(1)), PTR(A(2)), D(0));
 }
 
 /* ---- misc ---- */
@@ -944,7 +1078,8 @@ static const struct libimpl exec_impl[] = {
 	   RawPutChar -516 (exec/exec_lib.fd's execPrivate7..9) */
 	{ "execPrivate7", e_Nop }, { "execPrivate8", e_RawMayGetChar },
 	{ "execPrivate9", e_RawPutChar },
-	{ "FindResident", e_FindResident },
+	{ "FindResident", e_FindResident }, { "AddTask", e_AddTask },
+	{ "AddIntServer", e_AddIntServer }, { "RemIntServer", e_RemIntServer },
 	{ "ColdReboot", e_ColdReboot },
 	{ "StackSwap", e_StackSwap },
 	{ NULL, NULL }

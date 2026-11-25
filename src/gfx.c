@@ -1516,8 +1516,9 @@ static void g_ScalerDiv(struct frame *f)
 
 static void g_WaitTOF(struct frame *f)
 {
-	gui_flush();
-	timer_sleep(20000);
+	extern void exec_sleep(int64_t us);
+
+	exec_sleep(20000);
 }
 
 static void g_Nop(struct frame *f) { (void)f; }

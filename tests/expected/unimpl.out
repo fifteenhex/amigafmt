@@ -1,3 +1,3 @@
 before
-amigafmt: tunimpl: unimplemented dos.library -138 (CreateProc) called from $X; stopping
+amigafmt: tunimpl: unimplemented dos.library -696 (MakeDosEntry) called from $X; stopping
 rc=20

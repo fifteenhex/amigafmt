@@ -28,6 +28,7 @@ if need_float_store
 endif
 
 libm = cc.find_library('m', required: false)
+threads = dependency('threads')
 
 srcs = files(
   'src/main.c', 'src/lib.c', 'src/hunk.c', 'src/amem.c', 'src/path.c',
@@ -35,10 +36,10 @@ srcs = files(
   'src/pattern.c', 'src/date.c', 'src/utility.c', 'src/intuition.c',
   'src/gfx.c', 'src/gui.c', 'src/gadtools.c', 'src/icon.c', 'src/console.c',
   'src/iffparse.c', 'src/boopsi.c', 'src/asl.c', 'src/math.c', 'src/timer.c',
-  'src/diskfont.c', 'src/screen.c', 'src/blitter.c', 'src/fdtab.c',
-  'src/glue.S')
+  'src/diskfont.c', 'src/task.c', 'src/screen.c', 'src/blitter.c',
+  'src/fdtab.c', 'src/glue.S')
 amigafmt = executable('amigafmt', srcs,
-  dependencies: [libm],
+  dependencies: [libm, threads],
   install: true)
 
 install_data('tools/register.sh', install_dir: get_option('bindir'),

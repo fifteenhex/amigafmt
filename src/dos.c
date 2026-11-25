@@ -895,11 +895,9 @@ static void d_Exit(struct frame *f) { dos_exit(D(1)); }
 
 static void d_Delay(struct frame *f)
 {
-	struct timespec ts = { D(1) / 50, (D(1) % 50) * 20000000 };
+	extern void exec_sleep(int64_t us);
 
-	dos_flush_all();
-	while (nanosleep(&ts, &ts) && errno == EINTR)
-		;
+	exec_sleep((int64_t)(int32_t)D(1) * 20000);
 }
 
 static void d_DateStamp(struct frame *f)
@@ -1673,7 +1671,134 @@ static void d_MatchPatternNoCase(struct frame *f)
 	RET(pat_match(PTR(D(1)), PTR(D(2)), 1) ? DOSTRUE : DOSFALSE);
 }
 
+/* ---- CreateNewProc / CreateProc: a process on a task of its own (task.c) ---- */
+
+struct atask;
+extern struct atask *task_add(struct Task *t, uint32_t initpc, uint32_t finalpc,
+			      void (*cstart)(struct atask *));
+extern uint32_t task_initpc(struct atask *a);
+extern struct Task *task_of(struct atask *a);
+extern struct TagItem *util_next_tag(struct TagItem **tp);
+
+/* the process's entry, its arguments, then pr_ExitCode(result, ExitData) */
+static void process_start(struct atask *at)
+{
+	struct Process *p = (struct Process *)task_of(at);
+	struct regs r;
+	uint32_t rc;
+	const char *args = p->pr_Arguments ? PTR(p->pr_Arguments) : "";
+
+	memset(&r, 0, sizeof(r));
+	r.d[0] = strlen(args);
+	r.a[0] = APTR_OF(args);
+	r.a[6] = APTR_OF(SysBase);
+	r.a[7] = p->pr_Task.tc_SPReg;
+	rc = call_amiga(&r, task_initpc(at));
+	if (p->pr_ExitCode) {
+		memset(&r, 0, sizeof(r));
+		r.d[0] = rc;
+		r.d[1] = p->pr_ExitData;
+		r.a[6] = APTR_OF(SysBase);
+		r.a[7] = p->pr_Task.tc_SPReg;
+		call_amiga(&r, p->pr_ExitCode);
+	}
+}
+
+static struct Process *new_process(const char *name, int pri, uint32_t entry, uint32_t stack,
+				   struct TagItem *tags)
+{
+	struct Process *p = amem_alloc(sizeof(*p) + 64);
+	char *nm = amem_alloc(strlen(name) + 1);
+	uint8_t *st;
+	uint32_t *sp;
+	struct TagItem *t = tags, *x;
+	BPTR in = me->pr_CIS, out = me->pr_COS, err = me->pr_CES;
+
+	strcpy(nm, name);
+	p->pr_Task.tc_Node.ln_Type = NT_PROCESS;
+	p->pr_Task.tc_Node.ln_Name = APTR_OF(nm);
+	p->pr_Task.tc_Node.ln_Pri = pri;
+	p->pr_Task.tc_SigAlloc = 0xffff;
+	exec_newlist(&p->pr_Task.tc_MemEntry);
+	p->pr_MsgPort.mp_Node.ln_Type = NT_MSGPORT;
+	p->pr_MsgPort.mp_SigBit = 8;
+	p->pr_MsgPort.mp_SigTask = APTR_OF(p);
+	exec_newlist(&p->pr_MsgPort.mp_MsgList);
+	exec_newlist((struct List *)&p->pr_LocalVars);
+	p->pr_CurrentDir = me->pr_CurrentDir;
+	p->pr_HomeDir = me->pr_HomeDir;
+	p->pr_ConsoleTask = me->pr_ConsoleTask;
+	p->pr_FileSystemTask = me->pr_FileSystemTask;
+	p->pr_WindowPtr = me->pr_WindowPtr;
+	p->pr_GlobVec = me->pr_GlobVec;
+	p->pr_TaskNum = 0;
+	while ((x = util_next_tag(&t))) {
+		switch (x->ti_Tag - 0x800003e8) {
+		case 4: in = x->ti_Data; break;
+		case 5: out = x->ti_Data; break;
+		case 8: err = x->ti_Data; break;
+		case 10: p->pr_CurrentDir = x->ti_Data; break;
+		case 14: p->pr_ConsoleTask = x->ti_Data; break;
+		case 15: p->pr_WindowPtr = x->ti_Data; break;
+		case 16: p->pr_HomeDir = x->ti_Data; break;
+		case 21: p->pr_Arguments = x->ti_Data; break;
+		case 24: p->pr_ExitCode = x->ti_Data; break;
+		case 25: p->pr_ExitData = x->ti_Data; break;
+		}
+	}
+	p->pr_CIS = in;
+	p->pr_COS = out;
+	p->pr_CES = err;
+	if (stack < 4096)
+		stack = 4096;
+	st = amem_alloc(stack + 64);
+	p->pr_StackSize = stack;
+	p->pr_Task.tc_SPLower = APTR_OF(st);
+	p->pr_Task.tc_SPUpper = APTR_OF(st + stack);
+	p->pr_StackBase = MKBADDR(st + stack);
+	sp = (uint32_t *)(st + stack);
+	*--sp = stack;                          /* 4(sp) = the stack size */
+	p->pr_Task.tc_SPReg = APTR_OF(sp);
+	if (!task_add(&p->pr_Task, entry, 0, process_start))
+		return NULL;
+	return p;
+}
+
+static void d_CreateNewProc(struct frame *f)
+{
+	struct TagItem *tags = PTR(D(1)), *t = tags, *x;
+	uint32_t entry = 0, stack = 4000, name = 0;
+	int pri = 0;
+	struct Process *p;
+
+	while ((x = util_next_tag(&t))) {
+		switch (x->ti_Tag - 0x800003e8) {
+		case 1: entry = APTR_OF((uint32_t *)BADDR(x->ti_Data) + 1); break;
+		case 3: entry = x->ti_Data; break;
+		case 11: stack = x->ti_Data; break;
+		case 12: name = x->ti_Data; break;
+		case 13: pri = (int8_t)x->ti_Data; break;
+		}
+	}
+	if (!entry) {
+		RET(0);
+		return;
+	}
+	p = new_process(name ? PTR(name) : "New Process", pri, entry, stack, tags);
+	RET(p);
+}
+
+/* CreateProc(name, pri, seglist, stack): the old one, answers the MsgPort */
+static void d_CreateProc(struct frame *f)
+{
+	struct Process *p = new_process(D(1) ? PTR(D(1)) : "New Process", (int8_t)D(2),
+					APTR_OF((uint32_t *)BADDR(D(3)) + 1), D(4), NULL);
+
+	RET(p ? APTR_OF(&p->pr_MsgPort) : 0);
+}
+
 const struct libimpl dos_impl_io[] = {
+	{ "CreateNewProc", d_CreateNewProc }, { "CreateProc", d_CreateProc },
 	{ "Open", d_Open }, { "Close", d_Close },
 	{ "Read", d_Read }, { "Write", d_Write },
 	{ "Input", d_Input }, { "Output", d_Output },
