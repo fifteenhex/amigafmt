@@ -955,7 +955,8 @@ static struct Screen *open_screen(struct sspec *sp)
 		goto fail;
 	}
 	if ((id & ~MONITOR_ID_MASK) & HAM) {
-		af_warn("%s: HAM screens are not provided (ModeID $%x)", af_progname, id);
+		af_warn("%s: HAM screens are not provided (ModeID $%x, %dx%d+%d+%d, depth %d)",
+			af_progname, id, sp->width, sp->height, sp->left, sp->top, sp->depth);
 		err = OSERR_UNKNOWNMODE;
 		goto fail;
 	}

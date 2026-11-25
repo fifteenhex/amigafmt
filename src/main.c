@@ -67,7 +67,11 @@ static int src_ea(greg_t *g, const uint16_t *ext, int mode, int reg,
 static uint16_t custom_read(uint32_t off)
 {
 	switch (off & 0x1fe) {
-	case 0x002: return 0x03f0;              /* DMACONR */
+	case 0x000: {                           /* BLTDDAT */
+		extern uint16_t blitter_read(uint32_t off);
+		return blitter_read(off);
+	}
+	case 0x002: return 0x03f0;              /* DMACONR: the blitter is never busy */
 	case 0x004: return 0x3300;              /* VPOSR: Alice, NTSC */
 	case 0x07c: return 0x00f8;              /* DENISEID: Lisa */
 	default: return 0;
@@ -176,24 +180,50 @@ static int emulate_load(greg_t *g)
 
 /* a MOVE into the custom chips: discarded (CPU writes $DFF004 to see
    whether the bus gives it back) */
+/*
+ * A store to the custom chips: MOVE (sources Dn, An, #imm, (An), (An)+,
+ * d16(An), abs) or CLR to (An), (An)+, -(An), d16(An), abs.  Blitter
+ * registers go to blitter.c (which runs the blit); the rest is ignored.
+ */
 static int emulate_store(greg_t *g)
 {
+	extern int blitter_write(uint32_t off, int size, uint32_t v);
 	const uint16_t *pc = (const uint16_t *)(uintptr_t)g[R_PC];
 	uint16_t op = pc[0];
 	int smode = (op >> 3) & 7, sreg = op & 7;
-	int dmode = (op >> 6) & 7, dreg = (op >> 9) & 7, size, ns = 0, nd;
-	uint32_t ea, *a;
+	int dmode = (op >> 6) & 7, dreg = (op >> 9) & 7, size, ns = 0, nd, clr = 0;
+	uint32_t ea, *a, v = 0, sea = 0;
 
 	switch (op >> 12) {
 	case 1: size = 1; break;
 	case 2: size = 4; break;
 	case 3: size = 2; break;
+	case 4:
+		if ((op & 0xff00) != 0x4200 || ((op >> 6) & 3) == 3)
+			return 0;
+		size = 1 << ((op >> 6) & 3);
+		dmode = smode;                  /* CLR's effective address */
+		dreg = sreg;
+		clr = 1;
+		break;
 	default: return 0;
 	}
-	if (smode == 7 && sreg == 4)            /* #imm */
+	if (clr)
+		v = 0;
+	else if (smode == 0)
+		v = g[R_D0 + sreg];
+	else if (smode == 1)
+		v = *areg(g, sreg);
+	else if (smode == 7 && sreg == 4) {     /* #imm */
 		ns = size == 4 ? 2 : 1;
-	else if (smode > 1)
-		return 0;                       /* only Dn, An, #imm sources */
+		v = size == 4 ? (uint32_t)pc[1] << 16 | pc[2] : pc[1];
+	} else {
+		ns = src_ea(g, pc + 1, smode, sreg, &sea);
+		if (ns < 0)
+			return 0;
+		v = size == 1 ? *(uint8_t *)(uintptr_t)sea :
+		    size == 2 ? *(uint16_t *)(uintptr_t)sea : *(uint32_t *)(uintptr_t)sea;
+	}
 	a = areg(g, dreg);
 	switch (dmode) {
 	case 2: case 3: ea = *a; nd = 0; break;
@@ -214,11 +244,17 @@ static int emulate_store(greg_t *g)
 	}
 	if (ea < 0xdff000 || ea >= 0xdff200)
 		return 0;
+	if (!clr && smode == 3)
+		*areg(g, sreg) += size == 1 && sreg == 7 ? 2 : size;
 	if (dmode == 3)
 		*a += size;
 	else if (dmode == 4)
 		*a -= size;
-	if (af_trace)
+	if (size == 1)
+		v &= 0xff;
+	else if (size == 2)
+		v &= 0xffff;
+	if (!blitter_write(ea - 0xdff000, size, v) && af_trace)
 		af_warn("write to custom chip register $%x ignored", ea);
 	g[R_PC] += 2 + 2 * (ns + nd);
 	return 1;
