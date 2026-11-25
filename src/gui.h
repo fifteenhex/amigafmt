@@ -61,6 +61,9 @@ struct ascreen {
 	size_t planesize;
 	int bpr;
 	volatile int conv_y0, conv_y1;  /* rows to convert, y0 > y1: none */
+	int ham;                        /* 6 or 8: HAM6/HAM8, shown through a colour cube */
+	uint8_t *shadow;                /* a CUSTOMBITMAP's planes as last converted */
+	int top;                        /* SA_Top: the screen behind shows above */
 	struct ascreen *next;           /* front to back */
 };
 int screen_plane_fault(uint32_t addr);

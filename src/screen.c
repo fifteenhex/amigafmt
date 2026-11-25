@@ -18,9 +18,10 @@
  * whole numbers (low resolution pixels two display pixels wide, high one,
  * super-high half, rows doubled unless interlaced).
  *
- * The display database knows the NTSC and PAL modes an AGA Amiga has
- * except HAM (wbde screens are pens: HAM would need true colour), up to
- * 256 colours; DEFAULT_MONITOR_ID is NTSC.
+ * The display database knows the NTSC and PAL modes an AGA Amiga has, up
+ * to 256 colours, HAM6 and HAM8 included; DEFAULT_MONITOR_ID is NTSC.
+ * wbde screens are pens, so a HAM screen's pixels are decoded to colours
+ * here and shown through a 6x7x6 colour cube.
  */
 #define _GNU_SOURCE
 #include <stdlib.h>
@@ -74,6 +75,8 @@ static const struct mode modes[] = {
 	{ 0x8000, "High Res" }, { 0x8004, "High Res Laced" },
 	{ 0x8020, "Super-High Res" }, { 0x8024, "Super-High Res Laced" },
 	{ 0x0080, "Extra-Half Brite" }, { 0x0084, "Extra-Half Brite Laced" },
+	{ 0x0800, "HAM" }, { 0x0804, "HAM Laced" },
+	{ 0x8800, "High Res HAM" }, { 0x8804, "High Res HAM Laced" },
 };
 #define NMODES (int)(sizeof(modes) / sizeof(modes[0]))
 static const uint32_t monitors[] = { NTSC_MONITOR_ID, PAL_MONITOR_ID };
@@ -159,17 +162,14 @@ static void g_BestModeIDA(struct frame *f)
 		case 10: mon = monitor_of(x->ti_Data); break;           /* BIDTAG_SourceID */
 		}
 	}
-	/* HAM is the only property we cannot give; EHB is ours if asked */
-	if (must & 0x00000008) {
-		RET(INVALID_ID);
-		return;
-	}
 	for (i = 0; i < NMODES; i++) {
 		uint32_t id = mon | modes[i].key;
 		int w, h, d;
 		if ((int)depth > mode_depth(id))
 			continue;
 		if (!!(id & EXTRA_HALFBRITE) != !!(must & 0x00001000))
+			continue;
+		if (!!(id & HAM) != !!(must & 0x00000008))
 			continue;
 		if ((mustnot & 0x00000001) && (id & LACE))
 			continue;
@@ -249,6 +249,7 @@ static void g_GetDisplayInfoData(struct frame *f)
 			if (id & LACE) pf |= 0x00000001;
 			if (pal) pf |= 0x00000020;
 			if (id & EXTRA_HALFBRITE) pf |= 0x00001000;
+			if (id & HAM) pf |= 0x00000008;
 			if ((id & HIRES) && !(id & SUPERHIRES)) pf |= 0x00000100;  /* DIPF_IS_WB */
 			if (id & SUPERHIRES) pf |= 0x00000010;                     /* ECS */
 			*(uint16_t *)(b + 16) = 0;      /* NotAvailable */
@@ -755,7 +756,7 @@ int screen_plane_fault(uint32_t addr)
 
 	screen_plane_faults++;
 	for (as = gui_screens; as; as = as->next)
-		for (p = 0; p < as->depth; p++) {
+		for (p = 0; p < as->depth && !as->shadow; p++) {
 			uint32_t base = APTR_OF(as->planes[p]);
 			if (base && addr >= base && addr < base + as->planesize) {
 				uint32_t page = (addr - base) & ~4095u;
@@ -782,21 +783,77 @@ void as_rows_drawn(struct ascreen *as, int y0, int y1)
 		as->conv_y1 = y1;
 }
 
+/* the 6x7x6 colour cube a HAM screen is shown through */
+static void cube_palette(uint8_t pal[256][3])
+{
+	int r, g, b, i = 0;
+
+	memset(pal, 0, 256 * 3);
+	for (r = 0; r < 6; r++)
+		for (g = 0; g < 7; g++)
+			for (b = 0; b < 6; b++, i++) {
+				pal[i][0] = r * 255 / 5;
+				pal[i][1] = g * 255 / 6;
+				pal[i][2] = b * 255 / 5;
+			}
+}
+
+static int cube_pen(int r, int g, int b)
+{
+	return ((r * 5 + 127) / 255 * 7 + (g * 6 + 127) / 255) * 6 + (b * 5 + 127) / 255;
+}
+
+/* a HAM row: each pixel holds or modifies the colour of the one before */
+static void ham_row(struct ascreen *as, const uint8_t *v, uint8_t *o, int n)
+{
+	int sh = as->ham - 2, mask = (1 << sh) - 1, x;
+	int r = as->pal[0][0], g = as->pal[0][1], b = as->pal[0][2];
+
+	for (x = 0; x < n; x++) {
+		int ctl = v[x] >> sh, dat = v[x] & mask;
+		int c8 = sh == 4 ? dat * 17 : (dat << 2) | (dat >> 4);
+
+		switch (ctl) {
+		case 0: r = as->pal[dat][0], g = as->pal[dat][1], b = as->pal[dat][2]; break;
+		case 1: b = c8; break;
+		case 2: r = c8; break;
+		default: g = c8; break;
+		}
+		o[x] = cube_pen(r, g, b);
+	}
+}
+
+static uint8_t zero_row[1024];
+
 /* planar rows y0..y1 into the screen's buffer of pens, protected again */
 static void convert(struct ascreen *as)
 {
 	int y0 = as->conv_y0, y1 = as->conv_y1, y, bx, p, d = as->depth;
 
+	if (as->shadow) {               /* a CUSTOMBITMAP: what changed since */
+		int p2, y;
+		for (y = 0; y < as->h; y++)
+			for (p2 = 0; p2 < d; p2++) {
+				uint8_t *sh = as->shadow + p2 * as->planesize + (size_t)y * as->bpr;
+				const uint8_t *pl = as->planes[p2] ? as->planes[p2] + (size_t)y * as->bpr : NULL;
+				if (pl && memcmp(sh, pl, as->bpr)) {
+					memcpy(sh, pl, as->bpr);
+					if (y < y0) y0 = y;
+					if (y > y1) y1 = y;
+				}
+			}
+	}
 	if (y0 > y1)
 		return;
 	as->conv_y0 = 1 << 30;
 	as->conv_y1 = -1;
-	mprotect(as->planes[0], as->planesize * d, PROT_READ);
+	if (!as->shadow)
+		mprotect(as->planes[0], as->planesize * d, PROT_READ);
 	for (y = y0; y <= y1; y++) {
 		uint8_t *o = as->pix + (size_t)y * as->stride;
 		const uint8_t *row[8];
 		for (p = 0; p < d; p++)
-			row[p] = as->alias[p] + (size_t)y * as->bpr;
+			row[p] = as->alias[p] ? as->alias[p] + (size_t)y * as->bpr : zero_row;
 		for (bx = 0; bx < as->bpr && bx * 8 < as->w; bx++) {
 			uint8_t px[8] = { 0 };
 			int b, n = as->w - bx * 8 < 8 ? as->w - bx * 8 : 8;
@@ -809,6 +866,8 @@ static void convert(struct ascreen *as)
 			}
 			memcpy(o + bx * 8, px, n);
 		}
+		if (as->ham)
+			ham_row(as, o, o, as->w);
 	}
 	as_damage(as, 0, y0, as->w - 1, y1);
 }
@@ -819,6 +878,11 @@ void as_flush(void)
 	struct ascreen *as;
 
 	for (as = gui_screens; as; as = as->next) {
+		if (as->ham && as->pal_lo >= 0) {
+			/* new base colours: every HAM pixel again */
+			as->pal_lo = as->pal_hi = -1;
+			as_rows_drawn(as, 0, as->h - 1);
+		}
 		convert(as);
 		if (as->pal_lo >= 0) {
 			int n = as->pal_hi - as->pal_lo + 1;
@@ -954,12 +1018,6 @@ static struct Screen *open_screen(struct sspec *sp)
 		err = OSERR_NOMONITOR;
 		goto fail;
 	}
-	if ((id & ~MONITOR_ID_MASK) & HAM) {
-		af_warn("%s: HAM screens are not provided (ModeID $%x, %dx%d+%d+%d, depth %d)",
-			af_progname, id, sp->width, sp->height, sp->left, sp->top, sp->depth);
-		err = OSERR_UNKNOWNMODE;
-		goto fail;
-	}
 	if (!mode_known(id)) {
 		/* a mode of another display card: the nearest of ours */
 		af_warn("%s: unknown ModeID $%x, using NTSC:High Res", af_progname, id);
@@ -1048,8 +1106,19 @@ static struct Screen *open_screen(struct sspec *sp)
 		}
 		as->cm = cm;
 	}
-	memcpy(ns.palette, as->pal, sizeof(ns.palette));
+	if ((id & HAM) && (d == 6 || d == 8)) {
+		/* wbde shows the decoded colours through a colour cube */
+		as->ham = d;
+		ns.depth = 8;
+		cube_palette(ns.palette);
+		for (i = 0; i < WBP_NUMPENS; i++)
+			ns.pens[i] = cube_pen(as->pal[ns.pens[i]][0], as->pal[ns.pens[i]][1],
+					      as->pal[ns.pens[i]][2]);
+	} else
+		memcpy(ns.palette, as->pal, sizeof(ns.palette));
 	as->pal_lo = as->pal_hi = -1;
+	ns.top = sp->top > 0 ? sp->top : 0;
+	as->top = ns.top;
 
 	if (gui_call(WBP_OPEN_SCREEN, 0, &ns, sizeof(ns), WBP_SCREEN_OPENED, &m, sizeof(m),
 		     &mfd, &sid) || mfd < 0) {
@@ -1111,9 +1180,18 @@ static struct Screen *open_screen(struct sspec *sp)
 	ri = amem_alloc(12);                                     /* RasInfo */
 	*(uint32_t *)(ri + 4) = APTR_OF(&s->BitMap);
 	s->ViewPort.RasInfo = APTR_OF(ri);
-	if (sp->bitmap)
+	if (sp->bitmap) {
+		/* the program's own planes: nothing to protect, so each flush
+		   compares them with a copy of what was converted */
 		memcpy(&s->BitMap, PTR(sp->bitmap), sizeof(s->BitMap));
-	else {
+		as->bpr = s->BitMap.BytesPerRow;
+		as->planesize = (size_t)as->bpr * h;
+		as->conv_y0 = 0;
+		as->conv_y1 = h - 1;
+		for (i = 0; i < d && i < s->BitMap.Depth; i++)
+			as->planes[i] = as->alias[i] = PTR(s->BitMap.Planes[i]);
+		as->shadow = calloc(d, as->planesize);
+	} else {
 		s->BitMap.BytesPerRow = ((w + 15) / 16) * 2;
 		s->BitMap.Rows = h;
 		s->BitMap.Depth = d;
@@ -1262,7 +1340,9 @@ static void i_CloseScreen(struct frame *f)
 		}
 	gui_unmap(as->pix, as->size);
 	{
-		if (as->planes[0]) {
+		if (as->shadow)
+			free(as->shadow);
+		else if (as->planes[0]) {
 			munmap(as->planes[0], as->planesize * as->depth);
 			munmap(as->alias[0], as->planesize * as->depth);
 		}
@@ -1316,6 +1396,15 @@ static void i_ScreenToBack(struct frame *f)
 	as->next = NULL;
 	relink();
 	gui_send(WBP_SCREEN_TO_BACK, as->id, NULL, 0);
+}
+
+/* ScreenDepth(screen, flags, reserved): SDEPTH_TOBACK (1), else to front */
+static void i_ScreenDepth(struct frame *f)
+{
+	if (D(0) & 1)
+		i_ScreenToBack(f);
+	else
+		i_ScreenToFront(f);
 }
 
 void as_set_title(struct ascreen *as, const char *title, int show)
@@ -1421,6 +1510,7 @@ const struct libimpl screen_intuition_impl[] = {
 	{ "OpenScreen", i_OpenScreen }, { "OpenScreenTagList", i_OpenScreenTagList },
 	{ "CloseScreen", i_CloseScreen },
 	{ "ScreenToFront", i_ScreenToFront }, { "ScreenToBack", i_ScreenToBack },
+	{ "ScreenDepth", i_ScreenDepth },
 	{ "ShowTitle", i_ShowTitle }, { "LockPubScreen", i_LockPubScreen },
 	{ "UnlockPubScreen", i_UnlockPubScreen },
 	{ "GetScreenDrawInfo", i_GetScreenDrawInfo },
