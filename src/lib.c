@@ -20,7 +20,8 @@
 extern void lvo_common(void);
 
 struct amilib *all_libs[] = { &lib_exec, &lib_dos, &lib_utility,
-			      &lib_version,
+			      &lib_version, &lib_intuition, &lib_graphics,
+			      &lib_gadtools,
 			      NULL };
 struct frame *resume_frame;
 int dispatch_all_regs;

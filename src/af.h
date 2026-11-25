@@ -35,7 +35,8 @@ struct fdent {
 	const char *name, *regs;
 };
 
-extern const struct fdent fd_exec[], fd_dos[], fd_utility[];
+extern const struct fdent fd_exec[], fd_dos[], fd_utility[], fd_intuition[],
+	fd_graphics[];
 
 struct libimpl {
 	const char *name;
@@ -58,7 +59,8 @@ struct amilib {
 	int index;
 };
 
-extern struct amilib lib_exec, lib_dos, lib_utility, lib_version;
+extern struct amilib lib_exec, lib_dos, lib_utility, lib_version,
+	lib_intuition, lib_graphics, lib_gadtools;
 extern struct amilib *all_libs[];
 
 struct Library *lib_build(struct amilib *l);
