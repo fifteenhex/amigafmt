@@ -25,7 +25,7 @@ struct amilib *all_libs[] = { &lib_exec, &lib_dos, &lib_utility,
 			      &lib_mathieeedoubtrans, &lib_mathieeesingbas,
 			      &lib_mathieeesingtrans, &lib_mathffp,
 			      &lib_mathtrans, &lib_timer, &lib_icon, &lib_layers, &lib_asl,
-			      &lib_boopsi, &lib_workbench,
+			      &lib_iffparse, &lib_boopsi, &lib_workbench,
 			      &lib_datatypes,
 			      NULL };
 struct frame *resume_frame;

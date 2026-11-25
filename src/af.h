@@ -38,7 +38,7 @@ struct fdent {
 extern const struct fdent fd_exec[], fd_dos[], fd_utility[], fd_intuition[],
 	fd_graphics[], fd_locale[], fd_mathieeedoubbas[], fd_mathieeedoubtrans[],
 	fd_mathieeesingbas[], fd_mathieeesingtrans[], fd_mathffp[], fd_mathtrans[],
-	fd_icon[];
+	fd_icon[], fd_iffparse[];
 
 struct libimpl {
 	const char *name;
@@ -66,7 +66,7 @@ struct amilib {
 extern struct amilib lib_exec, lib_dos, lib_utility, lib_version,
 	lib_intuition, lib_graphics, lib_gadtools, lib_mathieeedoubbas,
 	lib_mathieeedoubtrans, lib_mathieeesingbas, lib_mathieeesingtrans,
-	lib_mathffp, lib_mathtrans, lib_timer, lib_icon, lib_layers, lib_asl, lib_boopsi, lib_workbench, lib_datatypes;
+	lib_mathffp, lib_mathtrans, lib_timer, lib_icon, lib_layers, lib_asl, lib_iffparse, lib_boopsi, lib_workbench, lib_datatypes;
 extern struct amilib *all_libs[];
 
 struct Library *lib_build(struct amilib *l);
