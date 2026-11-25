@@ -821,10 +821,13 @@ static void e_OpenLibrary(struct frame *f)
 	struct Library *b;
 
 	if (!l) {
-		if (af_trace)
+		extern uint32_t ramlib_open(struct frame *f, const char *name,
+					    uint32_t version);
+		uint32_t r = name ? ramlib_open(f, name, D(0)) : 0;
+		if (!r && af_trace)
 			af_warn("OpenLibrary(\"%s\", %d): not provided",
 				name ? name : "(null)", (int)D(0));
-		RET(0);
+		RET(r);
 		return;
 	}
 	b = lib_build(l);
@@ -845,7 +848,10 @@ static void e_OldOpenLibrary(struct frame *f)
 static void e_CloseLibrary(struct frame *f)
 {
 	struct Library *b = PTR(A(1));
+	extern int ramlib_close(struct frame *f, struct Library *lib);
 
+	if (ramlib_close(f, b))
+		return;
 	if (b && b->lib_OpenCnt)
 		b->lib_OpenCnt--;
 }
@@ -995,6 +1001,9 @@ static void e_RawPutChar(struct frame *f)
 static void e_RawMayGetChar(struct frame *f) { RET(-1); }
 
 static void e_FindResident(struct frame *f) { RET(0); }
+extern void e_MakeLibrary(struct frame *f), e_MakeFunctions(struct frame *f),
+	e_InitResident(struct frame *f), e_AddLibrary(struct frame *f),
+	e_RemLibrary(struct frame *f);
 
 static void e_ColdReboot(struct frame *f)
 {
@@ -1080,6 +1089,9 @@ static const struct libimpl exec_impl[] = {
 	{ "execPrivate9", e_RawPutChar },
 	{ "FindResident", e_FindResident }, { "AddTask", e_AddTask },
 	{ "AddIntServer", e_AddIntServer }, { "RemIntServer", e_RemIntServer },
+	{ "MakeLibrary", e_MakeLibrary }, { "MakeFunctions", e_MakeFunctions },
+	{ "InitResident", e_InitResident }, { "AddLibrary", e_AddLibrary },
+	{ "RemLibrary", e_RemLibrary },
 	{ "ColdReboot", e_ColdReboot },
 	{ "StackSwap", e_StackSwap },
 	{ NULL, NULL }
