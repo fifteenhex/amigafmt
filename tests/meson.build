@@ -12,7 +12,7 @@ foreach p : ['hello', 'abs4', 'crash']
                              command: [mkprog, cc_cmd, mkhunk, '@OUTPUT@', '@INPUT@'])}
 endforeach
 foreach p : ['targs', 'tfmt', 'tfiles', 'texec', 'tunimpl', 'tpat', 'tmath',
-             'ttimer']
+             'ttimer', 'tsystem']
   progs += {p: custom_target(p, input: ['start.S', 'lib.c', p + '.c'], output: p, build_by_default: true,
                              command: [mkprog, cc_cmd, mkhunk, '@OUTPUT@', '@INPUT@'])}
 endforeach
@@ -36,6 +36,7 @@ cases = [
   ['pattern', '0', [], 'tpat', []],
   ['math', '0', [], 'tmath', []],
   ['timer', '0', [], 'ttimer', []],
+  ['system', '0', [], 'tsystem', []],
 ]
 here = meson.current_build_dir()
 foreach c : cases

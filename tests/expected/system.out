@@ -1,0 +1,15 @@
+System(hello >T:af-sys.out) = 0
+it wrote: Hello, World!
+arglen 9 args [a b TO c]
+FROM[0] = "a"
+FROM[1] = "b"
+TO = "c"
+QUIET = 0
+TOG = -1
+System(targs a b TO c) = 0
+from-linux
+System(echo from-linux) = 0
+System(exit 7) = 7
+Hello, World!
+Execute(hello) = -1
+rc=0

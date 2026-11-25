@@ -17,6 +17,7 @@
 #include <sys/select.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <termios.h>
 #include <unistd.h>
@@ -1017,20 +1018,194 @@ static void d_GetConsoleTask(struct frame *f) { RET(con_port); }
 static void d_GetFileSysTask(struct frame *f) { RET(fs_port); }
 static void d_SetTask(struct frame *f) { RET(fs_port); }
 
+/*
+ * System() and Execute(): no shell, but a command line naming an AmigaOS
+ * program is run in this process, the way the shell would: the first
+ * word is the command (a path, or looked up in the current directory,
+ * then C:), then AmigaDOS redirections (<file, >file, >>file), the rest
+ * is its argument line.  A command that is not an AmigaOS executable is
+ * handed to the Linux shell (/bin/sh -c), so `System("echo hi")` works.
+ */
+static void d_RunCommand(struct frame *f);
+static int bstr_get(BPTR b, char *buf, int32_t len);
+static int bstr_set(BPTR b, const char *s, int max);
+
+static const char *FilePart_c(const char *p)
+{
+	const char *s = strrchr(p, '/');
+
+	if (!s)
+		s = strrchr(p, ':');
+	return s ? s + 1 : p;
+}
+
+static int32_t run_line(struct frame *f, const char *line, BPTR in, BPTR out)
+{
+	char cmd[256], *args, *lp = NULL, *redir_in = NULL, *redir_out = NULL;
+	const char *p = line;
+	int append = 0, err, n = 0;
+	BPTR seg = 0, oin = me->pr_CIS, oout = me->pr_COS, fin = 0, fout = 0;
+	BPTR odir = me->pr_CurrentDir;
+	struct CommandLineInterface *c = BADDR(me->pr_CLI);
+	char oldname[256];
+	int32_t rc;
+
+	while (*p == ' ' || *p == '\t')
+		p++;
+	if (*p == '"') {
+		for (p++; *p && *p != '"' && n < 255; p++)
+			cmd[n++] = *p;
+		if (*p == '"')
+			p++;
+	} else
+		while (*p && *p != ' ' && *p != '\t' && *p != '\n' && n < 255)
+			cmd[n++] = *p++;
+	cmd[n] = 0;
+	if (!n)
+		return 0;
+	/* redirections, which come right after the command */
+	args = malloc(strlen(p) + 2);
+	args[0] = 0;
+	for (;;) {
+		char tok[256];
+		int k = 0, isin, isout;
+		while (*p == ' ' || *p == '\t')
+			p++;
+		isin = *p == '<';
+		isout = *p == '>';
+		if (!isin && !isout)
+			break;
+		p++;
+		if (isout && *p == '>')
+			append = 1, p++;
+		while (*p == ' ')
+			p++;
+		while (*p && *p != ' ' && *p != '\t' && *p != '\n' && k < 255)
+			tok[k++] = *p++;
+		tok[k] = 0;
+		if (isin)
+			redir_in = strdup(tok);
+		else
+			redir_out = strdup(tok);
+	}
+	sprintf(args, "%s", p);
+	n = strlen(args);
+	while (n && (args[n - 1] == '\n' || args[n - 1] == ' '))
+		args[--n] = 0;
+	strcat(args, "\n");
+
+	if (strchr(cmd, ':') || strchr(cmd, '/'))
+		lp = path_to_linux(cmd, NULL);
+	else {
+		char a[300];
+		struct stat st;
+		lp = path_to_linux(cmd, NULL);
+		if (!lp || stat(lp, &st) || !S_ISREG(st.st_mode)) {
+			free(lp);
+			snprintf(a, sizeof(a), "C:%s", cmd);
+			lp = path_to_linux(a, NULL);
+		}
+	}
+	if (lp)
+		seg = hunk_load(lp, &err);
+	free(lp);
+	if (!seg) {
+		/* not an AmigaOS program: the Linux shell */
+		char *sh = malloc(strlen(line) + 1);
+		dos_flush_all();
+		strcpy(sh, line);
+		n = strlen(sh);
+		while (n && sh[n - 1] == '\n')
+			sh[--n] = 0;
+		rc = system(sh);
+		free(sh);
+		free(args);
+		free(redir_in);
+		free(redir_out);
+		if (rc < 0 || !WIFEXITED(rc))
+			return -1;
+		rc = WEXITSTATUS(rc);
+		return rc == 127 ? -1 : rc;
+	}
+	if (redir_in && !(fin = dos_open(redir_in, MODE_OLDFILE))) {
+		rc = -1;
+		goto out;
+	}
+	if (redir_out && !(fout = dos_open(redir_out, append ?
+					    MODE_READWRITE : MODE_NEWFILE))) {
+		rc = -1;
+		goto out;
+	}
+	if (fout && append) {
+		struct afh *a = fh_priv(fout);
+		lseek(a->wfd, 0, SEEK_END);
+	}
+	me->pr_CIS = fin ? fin : in ? in : oin;
+	me->pr_COS = fout ? fout : out ? out : oout;
+	bstr_get(c->cli_CommandName, oldname, sizeof(oldname));
+	bstr_set(c->cli_CommandName, FilePart_c(cmd), 255);
+	{
+		struct frame g = *f;
+		char *amargs = amem_alloc(strlen(args) + 1);
+		strcpy(amargs, args);
+		g.d[1] = seg;
+		g.d[2] = me->pr_StackSize;
+		g.d[3] = APTR_OF(amargs);
+		g.d[4] = strlen(amargs);
+		d_RunCommand(&g);
+		rc = g.d[0];
+		amem_free(amargs);
+	}
+	bstr_set(c->cli_CommandName, oldname, 255);
+	dos_flush_all();
+	if (me->pr_CurrentDir != odir) {        /* the child's cd is its own */
+		me->pr_CurrentDir = odir;
+		path_set_cwd(lock_path(odir));
+	}
+out:
+	me->pr_CIS = oin;
+	me->pr_COS = oout;
+	if (fin)
+		fh_close(fin);
+	if (fout)
+		fh_close(fout);
+	hunk_unload(seg);
+	free(args);
+	free(redir_in);
+	free(redir_out);
+	return rc;
+}
+
 static void d_Execute(struct frame *f)
 {
-	af_warn("%s: Execute(\"%s\") is not supported", af_progname,
-		(char *)PTR(D(1)));
-	dos_set_ioerr(ERROR_NOT_IMPLEMENTED);
-	RET(DOSFALSE);
+	int32_t rc = run_line(f, PTR(D(1)), D(2), D(3));
+
+	RET(rc < 0 ? DOSFALSE : DOSTRUE);
 }
+
+#define SYS_Input  0x80000021
+#define SYS_Output 0x80000022
+#define SYS_Asynch 0x80000023
 
 static void d_SystemTagList(struct frame *f)
 {
-	af_warn("%s: System(\"%s\") is not supported", af_progname,
-		(char *)PTR(D(1)));
-	dos_set_ioerr(ERROR_NOT_IMPLEMENTED);
-	RET(-1);
+	struct TagItem *t = PTR(D(2));
+	BPTR in = 0, out = 0;
+
+	for (; t && t->ti_Tag; t++) {
+		if (t->ti_Tag == 2) {           /* TAG_MORE */
+			t = PTR(t->ti_Data);
+			if (!t)
+				break;
+			t--;
+			continue;
+		}
+		if (t->ti_Tag == SYS_Input)
+			in = t->ti_Data;
+		else if (t->ti_Tag == SYS_Output)
+			out = t->ti_Data;
+	}
+	RET(run_line(f, PTR(D(1)), in, out));
 }
 
 static void d_CheckSignal(struct frame *f)
