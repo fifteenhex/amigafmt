@@ -471,6 +471,7 @@ static const struct libimpl bsd_impl_base[] = {
 };
 
 static const struct libimpl *const bsd_impls[] = {
+	bsd_impl_sock,
 	NULL
 };
 

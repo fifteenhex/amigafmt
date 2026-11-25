@@ -37,8 +37,8 @@ srcs = files(
   'src/gfx.c', 'src/gui.c', 'src/gadtools.c', 'src/icon.c', 'src/console.c',
   'src/iffparse.c', 'src/boopsi.c', 'src/asl.c', 'src/math.c', 'src/timer.c',
   'src/diskfont.c', 'src/ramlib.c', 'src/locale.c', 'src/task.c',
-  'src/screen.c', 'src/blitter.c', 'src/bsdsocket.c', 'src/netdb.c',
-  'src/fdtab.c', 'src/glue.S')
+  'src/screen.c', 'src/blitter.c', 'src/bsdsocket.c', 'src/bsd_sock.c',
+  'src/netdb.c', 'src/fdtab.c', 'src/glue.S')
 amigafmt = executable('amigafmt', srcs,
   dependencies: [libm, threads],
   install: true)
