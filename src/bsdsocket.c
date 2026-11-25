@@ -472,6 +472,7 @@ static const struct libimpl bsd_impl_base[] = {
 
 static const struct libimpl *const bsd_impls[] = {
 	bsd_impl_sock, bsd_impl_io, bsd_impl_sel, bsd_impl_dup,
+	bsd_impl_db,
 	NULL
 };
 
