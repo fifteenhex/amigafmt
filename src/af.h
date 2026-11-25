@@ -111,6 +111,25 @@ void timer_sleep(int64_t us);
 
 /* exec */
 void exec_init(void);
+/* Linux descriptors a task sleeps on (see exec.c) */
+struct pollfd;
+struct exec_fdwait {
+	struct pollfd *pfd;             /* revents filled in when it fires */
+	int n;
+	int64_t deadline;               /* exec_now_us() time, -1 for none */
+	struct Task *task;              /* signalled with sig when it fires */
+	uint32_t sig;
+	void (*fire)(struct exec_fdwait *w);    /* or this is called */
+	void *data;
+	int fired;
+	/* exec's */
+	int first, last;
+	struct exec_fdwait *next;
+};
+void exec_fdwait_add(struct exec_fdwait *w);
+void exec_fdwait_remove(struct exec_fdwait *w);
+int exec_have_fdwaits(void);
+int64_t exec_now_us(void);
 void exec_pending_break(void);
 
 /* dos */

@@ -440,6 +440,111 @@ static int64_t vblank(void)
 }
 
 /*
+ * Linux file descriptors a task waits on (bsdsocket's WaitSelect and its
+ * blocking calls): whoever sleeps for everybody in exec_wait_events() or
+ * exec_sleep() polls them too, and signals the waiting task when one is
+ * ready or its deadline passes.  A watcher with fd_fire set instead calls
+ * that (asynchronous socket notification).
+ */
+static struct exec_fdwait *fdwaits;
+
+void exec_fdwait_add(struct exec_fdwait *w)
+{
+	w->next = fdwaits;
+	fdwaits = w;
+}
+
+void exec_fdwait_remove(struct exec_fdwait *w)
+{
+	struct exec_fdwait **pp;
+
+	for (pp = &fdwaits; *pp; pp = &(*pp)->next)
+		if (*pp == w) {
+			*pp = w->next;
+			return;
+		}
+}
+
+int64_t exec_now_us(void)
+{
+	return mono_us();
+}
+
+/* microseconds to the earliest watcher deadline, -1 for none */
+static int64_t fdwait_due(void)
+{
+	struct exec_fdwait *w;
+	int64_t now = mono_us(), best = -1;
+
+	for (w = fdwaits; w; w = w->next)
+		if (w->deadline >= 0) {
+			int64_t d = w->deadline - now;
+			if (d < 0)
+				d = 0;
+			if (best < 0 || d < best)
+				best = d;
+		}
+	return best;
+}
+
+/*
+ * Poll wbde's socket and every watcher's descriptors for up to us
+ * microseconds (-1: for ever).  Wakes the watchers that are ready or due;
+ * 1 when anything happened (an event, a watcher, a Linux signal).
+ */
+static int poll_all(int64_t us)
+{
+	struct pollfd pf[64];
+	struct exec_fdwait *w, *next;
+	int n = 0, gi = -1, fd = gui_fd(), r, any = 0;
+	int64_t due = fdwait_due(), now;
+
+	if (due >= 0 && (us < 0 || due < us))
+		us = due;
+	if (fd >= 0) {
+		gi = n;
+		pf[n++] = (struct pollfd){ fd, POLLIN, 0 };
+	}
+	for (w = fdwaits; w; w = w->next) {
+		w->first = n;
+		for (int i = 0; i < w->n && n < 64; i++)
+			pf[n++] = w->pfd[i];
+		w->last = n;
+	}
+	r = poll(pf, n, us < 0 ? -1 : (int)((us + 999) / 1000));
+	if (r < 0)
+		return 1;                       /* a Linux signal (^C) */
+	if (gi >= 0 && pf[gi].revents) {
+		gui_pump(0);
+		any = 1;
+	}
+	now = mono_us();
+	for (w = fdwaits; w; w = next) {
+		int ready = 0;
+		next = w->next;
+		for (int i = w->first; i < w->last; i++)
+			if (pf[i].revents) {
+				w->pfd[i - w->first].revents = pf[i].revents;
+				ready = 1;
+			}
+		if (ready || (w->deadline >= 0 && now >= w->deadline)) {
+			w->fired = 1;
+			any = 1;
+			if (w->fire)
+				w->fire(w);
+			else if (w->task)
+				task_signal(w->task, w->sig, 0);
+		}
+	}
+	return any || r > 0;
+}
+
+int exec_have_fdwaits(void)
+{
+	return fdwaits != NULL;
+}
+
+/*
  * Sleep for us microseconds the way a task blocked in WaitTOF() or
  * Delay() does: other tasks run meanwhile (a program that polls another
  * task with WaitTOF in a loop needs that), wbde's events and timer.device
@@ -465,11 +570,9 @@ void exec_sleep(int64_t us)
 				left = vb > 0 ? vb : 1;
 			if (t >= 0 && t < left)
 				left = t > 0 ? t : 1;
-			if (fd >= 0) {
-				struct pollfd p = { fd, POLLIN, 0 };
-				if (poll(&p, 1, (int)((left + 999) / 1000)) > 0)
-					gui_pump(0);
-			} else
+			if (fd >= 0 || fdwaits)
+				poll_all(left);
+			else
 				timer_sleep(left);
 			timer_poll();
 		}
@@ -499,10 +602,8 @@ int exec_wait_events(uint32_t mask)
 		if (us < 0 || us > 100000 - (now - last_tick))
 			us = 100000 - (now - last_tick);
 	}
-	if (fd >= 0) {
-		struct pollfd p = { fd, POLLIN, 0 };
-		if (poll(&p, 1, us < 0 ? -1 : (int)((us + 999) / 1000)) > 0)
-			gui_pump(0);
+	if (fd >= 0 || fdwaits) {
+		poll_all(us);
 		timer_poll();
 		return 1;
 	}
