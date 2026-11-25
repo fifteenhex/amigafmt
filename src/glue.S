@@ -1,13 +1,32 @@
 /*
- * The crossing from C into the Amiga program.
+ * The two crossings between the Amiga program and the C side.
+ *
+ * Library vector:  jmp stub  ->  stub: move.l #id,-(sp); jmp lvo_common
+ *   The Amiga stack then holds [id][caller's return].  lvo_common saves
+ *   d0-d7/a0-a6 under it (struct frame), switches to the native stack and
+ *   calls amiga_dispatch(frame), which returns the frame to resume from
+ *   (normally the same one; StackSwap() hands back one on the new stack).
  *
  * call_amiga(regs, pc): run Amiga code with every register from *regs
  *   (a7 included) and a return address pushed on its stack; on return
  *   store the registers back and return d0.  native_sp is the native
- *   stack C runs on while Amiga code is running; call_amiga sets it to
- *   its own frame and restores the outer value afterwards, so calls nest.
+ *   stack the dispatcher runs C on; call_amiga sets it to its own frame
+ *   and restores the outer value afterwards, so callbacks nest.
  */
 	.text
+
+	.globl	lvo_common
+lvo_common:
+	movem.l	%d0-%d7/%a0-%a6,-(%sp)
+	move.l	%sp,%a2
+	move.l	native_sp,%sp
+	move.l	%a2,-(%sp)
+	jsr	amiga_dispatch
+	move.l	%d0,%sp
+	movem.l	(%sp)+,%d0-%d7/%a0-%a6
+	addq.l	#4,%sp
+	tst.l	%d0
+	rts
 
 	.globl	call_amiga
 call_amiga:

@@ -14,7 +14,6 @@
 #include <errno.h>
 #include <getopt.h>
 #include <signal.h>
-#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -24,7 +23,6 @@
 
 int af_trace;
 const char *af_progname = "amigafmt";
-struct ExecBase *SysBase;
 static BPTR the_seg;
 static int page0;
 static uint32_t stack_lo, stack_hi;
@@ -227,7 +225,7 @@ static void usage(void)
 	fprintf(stderr,
 		"usage: amigafmt [options] program [arguments...]\n"
 		"  -s BYTES      stack size (default 262144)\n"
-		"  -t            trace to stderr\n"
+		"  -t            trace every library call to stderr\n"
 		"  -n            do not map page 0 (emulate reads of address 4)\n");
 	exit(20);
 }
@@ -276,8 +274,7 @@ int main(int argc, char **argv)
 		return 20;
 	}
 
-	/* exec.library fills this in; for now the program finds zeros */
-	SysBase = amem_alloc(sizeof(*SysBase));
+	exec_init(af_progname);
 	map_page0(!nopage0);
 	if (af_trace)
 		fprintf(stderr, "amigafmt: ExecBase at $%08x, address 4 %s\n",
@@ -301,6 +298,8 @@ int main(int argc, char **argv)
 	st = amem_alloc(stack + 64);
 	stack_lo = APTR_OF(st);
 	stack_hi = stack_lo + stack;
+	me->pr_Task.tc_SPLower = stack_lo;
+	me->pr_Task.tc_SPUpper = stack_hi;
 	sp = (uint32_t *)(st + stack);
 	*--sp = stack;                          /* 4(sp) = stack size */
 	args = make_args(argc - optind - 1, argv + optind + 1, &arglen);
@@ -314,27 +313,4 @@ int main(int argc, char **argv)
 		fprintf(stderr, "amigafmt: %s returned %d\n", af_progname,
 			(int)rc);
 	return (int32_t)rc < 0 || rc > 255 ? 255 : (int)rc;
-}
-
-void af_die(const char *fmt, ...)
-{
-	va_list ap;
-
-	fprintf(stderr, "amigafmt: ");
-	va_start(ap, fmt);
-	vfprintf(stderr, fmt, ap);
-	va_end(ap);
-	fputc('\n', stderr);
-	exit(20);
-}
-
-void af_warn(const char *fmt, ...)
-{
-	va_list ap;
-
-	fprintf(stderr, "amigafmt: ");
-	va_start(ap, fmt);
-	vfprintf(stderr, fmt, ap);
-	va_end(ap);
-	fputc('\n', stderr);
 }
