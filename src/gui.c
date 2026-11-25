@@ -184,7 +184,7 @@ static void other(const struct wbp_hdr *h, const uint8_t *p, int mfd)
 }
 
 /* send a request, wait for the reply with its serial */
-static int call(uint32_t type, uint32_t win, const void *p, uint32_t len,
+int gui_call(uint32_t type, uint32_t win, const void *p, uint32_t len,
 		uint32_t reply, void *out, size_t outlen, int *outfd,
 		uint32_t *outwin)
 {
@@ -380,7 +380,7 @@ int gui_connect(void)
 	memset(&hello, 0, sizeof(hello));
 	hello.version = WBP_VERSION;
 	snprintf(hello.name, sizeof(hello.name), "%s", af_progname);
-	if (call(WBP_HELLO, 0, &hello, sizeof(hello), WBP_SCREEN, &gui_screen,
+	if (gui_call(WBP_HELLO, 0, &hello, sizeof(hello), WBP_SCREEN, &gui_screen,
 		 sizeof(gui_screen), NULL, NULL)) {
 		failed = 1;
 		return -1;
@@ -414,7 +414,7 @@ struct awin *gui_open(const struct wbp_open *o)
 
 	if (gui_connect())
 		return NULL;
-	if (call(WBP_OPEN, 0, o, sizeof(*o), WBP_WINDOW, &m, sizeof(m), &mfd,
+	if (gui_call(WBP_OPEN, 0, o, sizeof(*o), WBP_WINDOW, &m, sizeof(m), &mfd,
 		 &id) || mfd < 0)
 		return NULL;
 	a = calloc(1, sizeof(*a));
@@ -484,10 +484,25 @@ void gui_damage(struct awin *a, int x0, int y0, int x1, int y1)
 	if (y1 > a->dy1) a->dy1 = y1;
 }
 
+void *gui_map(int mfd, size_t size)
+{
+	void *p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, mfd, 0);
+
+	close(mfd);
+	return p == MAP_FAILED ? NULL : p;
+}
+
+void gui_unmap(void *p, size_t size)
+{
+	if (p)
+		munmap(p, size);
+}
+
 void gui_flush(void)
 {
 	struct awin *a;
 
+	as_flush();
 	for (a = gui_wins; a; a = a->next)
 		if (a->dirty) {
 			struct wbp_rect r = { a->dx0, a->dy0, a->dx1 - a->dx0 + 1,
@@ -537,7 +552,7 @@ int gui_obtain_pen(uint8_t r, uint8_t g, uint8_t b)
 	uint8_t rgb[3] = { r, g, b };
 	uint32_t pen = 1;
 
-	if (gui_connect() || call(WBP_OBTAIN_PEN, 0, rgb, 3, WBP_PEN, &pen,
+	if (gui_connect() || gui_call(WBP_OBTAIN_PEN, 0, rgb, 3, WBP_PEN, &pen,
 				  sizeof(pen), NULL, NULL))
 		return 1;
 	return pen;

@@ -10,6 +10,7 @@
  */
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 #include "gui.h"
 
@@ -23,6 +24,8 @@ struct surf {
 	int ox, oy;                     /* RastPort coords minus these */
 	int cx0, cy0, cx1, cy1;         /* clip, surface coords */
 	struct awin *a;
+	struct ascreen *sc;             /* a custom screen's own pixels */
+	int pmask;                      /* pens a chunky surface can hold */
 	int any, bx0, by0, bx1, by1;
 	int16_t *rects;                 /* a layer's clip region, rp coords */
 	int nrects;
@@ -123,13 +126,15 @@ static int surf_open(struct RastPort *rp, struct surf *s)
 		for (a = gui_wins; a; a = a->next)
 			if (APTR_OF(a->bm) == rp->BitMap)
 				break;
+	s->pmask = 0xff;
 	if (a) {
 		if (!a->pix)
 			return 0;
 		s->a = a;
 		s->pix = a->pix;
 		s->stride = a->stride;
-		s->depth = 8;
+		s->depth = a->as ? a->as->depth : 8;
+		s->pmask = (1 << s->depth) - 1;
 		if (!(a->w->Flags & 0x400)) {   /* not GIMMEZEROZERO */
 			s->ox = a->bl;
 			s->oy = a->bt;
@@ -142,6 +147,21 @@ static int surf_open(struct RastPort *rp, struct surf *s)
 			s->nrects = g->n ? g->n : -1;   /* empty: nothing drawn */
 		}
 		return 1;
+	}
+	{
+		struct ascreen *as = as_by_rp(rp);
+		if (as) {
+			if (!as->pix)
+				return 0;
+			s->sc = as;
+			s->pix = as->pix;
+			s->stride = as->stride;
+			s->depth = as->depth;
+			s->pmask = (1 << as->depth) - 1;
+			s->cx1 = as->w - 1;
+			s->cy1 = as->h - 1;
+			return 1;
+		}
 	}
 	if (!rp->BitMap || (wb_screen && rp->BitMap == APTR_OF(&wb_screen->BitMap)))
 		return 0;
@@ -172,6 +192,8 @@ static void surf_close(struct surf *s)
 {
 	if (s->a && s->any)
 		gui_damage(s->a, s->bx0, s->by0, s->bx1, s->by1);
+	if (s->sc && s->any)
+		as_damage(s->sc, s->bx0, s->by0, s->bx1, s->by1);
 }
 
 static inline void touch(struct surf *s, int x0, int y0, int x1, int y1)
@@ -212,7 +234,7 @@ static inline void sset(struct surf *s, int x, int y, int pen)
 	if (s->nrects && (s->nrects < 0 || !in_region(s, x + s->ox, y + s->oy)))
 		return;
 	if (s->pix) {
-		s->pix[y * s->stride + x] = pen;
+		s->pix[y * s->stride + x] = pen & s->pmask;
 		return;
 	}
 	for (p = 0; p < s->depth; p++) {
@@ -267,7 +289,7 @@ static void fill_pen(struct surf *s, int x0, int y0, int x1, int y1, int pen)
 		return;
 	if (s->pix && !s->nrects)
 		for (y = y0; y <= y1; y++)
-			memset(s->pix + y * s->stride + x0, pen, x1 - x0 + 1);
+			memset(s->pix + y * s->stride + x0, pen & s->pmask, x1 - x0 + 1);
 	else
 		for (y = y0; y <= y1; y++)
 			for (x = x0; x <= x1; x++)
@@ -364,12 +386,32 @@ void gfx_line(struct RastPort *rp, int x0, int y0, int x1, int y1)
 
 /* ---- text ---- */
 
-struct TextFont *gfx_font_for(struct TextAttr *ta)
+
+static int is_topaz(const char *n)
 {
-	(void)ta;
+	const char *p = strrchr(n, '/'), *q = strrchr(n, ':');
+
+	if (q && (!p || q > p))
+		p = q;
+	return !strcasecmp(p ? p + 1 : n, "topaz.font");
+}
+
+/* a font in memory (topaz from wbde), else NULL */
+static struct TextFont *font_in_memory(struct TextAttr *ta)
+{
 	if (!gui_topaz)
 		gui_connect();
-	return gui_topaz;       /* the only font there is: topaz from wbde */
+	if (!ta || !ta->ta_Name || is_topaz(PTR(ta->ta_Name)))
+		return gui_topaz;
+	return NULL;
+}
+
+/* for drawing: the font asked for if it is in memory, else topaz */
+struct TextFont *gfx_font_for(struct TextAttr *ta)
+{
+	struct TextFont *tf = font_in_memory(ta);
+
+	return tf ? tf : gui_topaz;
 }
 
 static struct TextFont *rp_font(struct RastPort *rp)
@@ -998,7 +1040,15 @@ static void g_Flood(struct frame *f)
 
 /* ---- fonts ---- */
 
-static void g_OpenFont(struct frame *f) { RET(gfx_font_for(PTR(A(0)))); }
+/* OpenFont: only what is in memory, as graphics does; diskfont loads the rest */
+static void g_OpenFont(struct frame *f)
+{
+	struct TextFont *tf = font_in_memory(PTR(A(0)));
+
+	if (tf)
+		tf->tf_Accessors++;
+	RET(tf);
+}
 static void g_CloseFont(struct frame *f) { (void)f; }
 
 static void g_SetFont(struct frame *f)
@@ -1383,66 +1433,6 @@ static void g_WriteChunkyPixels(struct frame *f)
 
 /* ---- colours: the Workbench palette, read only ---- */
 
-static const uint8_t *pal(int n)
-{
-	return gui_screen.palette[n & 255];
-}
-
-static void g_GetRGB4(struct frame *f)
-{
-	const uint8_t *c = pal(D(0));
-	RET((c[0] >> 4) << 8 | (c[1] >> 4) << 4 | c[2] >> 4);
-}
-
-static void g_GetRGB32(struct frame *f)
-{
-	uint32_t *t = PTR(A(1)), i;
-
-	for (i = 0; i < D(1); i++) {
-		const uint8_t *c = pal(D(0) + i);
-		t[3 * i] = c[0] * 0x01010101u;
-		t[3 * i + 1] = c[1] * 0x01010101u;
-		t[3 * i + 2] = c[2] * 0x01010101u;
-	}
-}
-
-static void g_ObtainBestPenA(struct frame *f)
-{
-	RET(gui_obtain_pen(D(1) >> 24, D(2) >> 24, D(3) >> 24));
-}
-
-static void g_ObtainPen(struct frame *f)
-{
-	if ((int32_t)D(0) != -1) {
-		RET(-1);        /* a particular pen: the Workbench keeps them */
-		return;
-	}
-	RET(gui_obtain_pen(D(1) >> 24, D(2) >> 24, D(3) >> 24));
-}
-
-static void g_FindColor(struct frame *f)
-{
-	int best = 0, i, max = (int32_t)D(4) < 0 ? 255 : (int)D(4);
-	long bd = 1L << 30;
-
-	for (i = 0; i <= max && i < 256; i++) {
-		const uint8_t *c = pal(i);
-		long dr = c[0] - (int)(D(1) >> 24), dg = c[1] - (int)(D(2) >> 24),
-		     db = c[2] - (int)(D(3) >> 24), d = dr * dr + dg * dg + db * db;
-		if (d < bd)
-			bd = d, best = i;
-	}
-	RET(best);
-}
-
-static void g_GetColorMap(struct frame *f)
-{
-	uint8_t *cm = amem_alloc(64);
-	*(uint16_t *)(cm + 2) = D(0);
-	RET(cm);
-}
-
-static void g_GetVPModeID(struct frame *f) { RET(0x8000); }
 
 static void g_WaitTOF(struct frame *f)
 {
@@ -1746,89 +1736,7 @@ static void g_GetRPAttrsA(struct frame *f)
 	}
 }
 
-/*
- * The display database: one mode, wbde's screen (640 wide, HIRES_KEY).
- * DisplayInfo, DimensionInfo, MonitorInfo and NameInfo with a QueryHeader
- * each, as GetDisplayInfoData() fills them.
- */
-#define HIRES_KEY  0x00008000
-#define INVALID_ID 0xffffffff
-
-static void g_BestModeIDA(struct frame *f) { RET(HIRES_KEY); }
-static void g_FindDisplayInfo(struct frame *f) { RET(D(0) == HIRES_KEY ? APTR_OF(amem_alloc(16)) : 0); }
-
-static void g_NextDisplayInfo(struct frame *f)
-{
-	RET(D(0) == INVALID_ID ? HIRES_KEY : INVALID_ID);
-}
-
-static void g_GetDisplayInfoData(struct frame *f)
-{
-	uint8_t *b = PTR(A(1));
-	uint32_t size = D(0), tag = D(1);
-	int w = gui_screen.width ? gui_screen.width : 640;
-	int h = gui_screen.height ? gui_screen.height : 200;
-	uint32_t n;
-
-	memset(b, 0, size);
-	if (size < 16) {
-		RET(0);
-		return;
-	}
-	*(uint32_t *)(b + 0) = tag;
-	*(uint32_t *)(b + 4) = HIRES_KEY;
-	*(uint32_t *)(b + 8) = 0;               /* SkipID: TAG_SKIP */
-	switch (tag) {
-	case 0x80000000:                        /* DTAG_DISP */
-		n = 56;
-		if (size >= 42) {
-			*(uint16_t *)(b + 16) = 0;
-			*(uint32_t *)(b + 18) = 0x00001000;     /* DIPF_IS_WB */
-			*(int16_t *)(b + 22) = 22;
-			*(int16_t *)(b + 24) = 44;
-			*(uint16_t *)(b + 26) = 70;
-			*(uint16_t *)(b + 30) = 4096;
-			b[40] = b[41] = b[42] = 8;
-		}
-		break;
-	case 0x80001000:                        /* DTAG_DIMS */
-		n = 88;
-		if (size >= 66) {
-			int16_t *r = (int16_t *)(b + 26);
-			int i;
-			*(uint16_t *)(b + 16) = 8;
-			*(uint16_t *)(b + 18) = 16;
-			*(uint16_t *)(b + 20) = 1;
-			*(uint16_t *)(b + 22) = 16368;
-			*(uint16_t *)(b + 24) = 16384;
-			for (i = 0; i < 5; i++) {
-				r[4 * i] = 0;
-				r[4 * i + 1] = 0;
-				r[4 * i + 2] = w - 1;
-				r[4 * i + 3] = h - 1;
-			}
-		}
-		break;
-	case 0x80002000:                        /* DTAG_MNTR */
-		n = 96;
-		break;
-	case 0x80003000:                        /* DTAG_NAME */
-		n = 56;
-		if (size >= 48)
-			snprintf((char *)b + 16, 32, "Workbench:%dx%d", w, h);
-		break;
-	default:
-		RET(0);
-		return;
-	}
-	*(uint32_t *)(b + 12) = n / 8;          /* Length, in double longs */
-	RET(n < size ? n : size);
-}
-
 static const struct libimpl gfx_impl[] = {
-	{ "BestModeIDA", g_BestModeIDA }, { "FindDisplayInfo", g_FindDisplayInfo },
-	{ "NextDisplayInfo", g_NextDisplayInfo },
-	{ "GetDisplayInfoData", g_GetDisplayInfoData },
 	{ "InitRastPort", g_InitRastPort },
 	{ "SetAPen", g_SetAPen }, { "SetBPen", g_SetBPen },
 	{ "SetDrMd", g_SetDrMd }, { "SetABPenDrMd", g_SetABPenDrMd },
@@ -1865,13 +1773,7 @@ static const struct libimpl gfx_impl[] = {
 	{ "WritePixelLine8", g_WritePixelLine8 },
 	{ "ReadPixelLine8", g_ReadPixelLine8 },
 	{ "WriteChunkyPixels", g_WriteChunkyPixels },
-	{ "GetRGB4", g_GetRGB4 }, { "GetRGB32", g_GetRGB32 },
-	{ "SetRGB4", g_Nop }, { "SetRGB32", g_Nop }, { "LoadRGB4", g_Nop },
-	{ "LoadRGB32", g_Nop }, { "SetRGB4CM", g_Nop }, { "SetRGB32CM", g_Nop },
-	{ "ObtainBestPenA", g_ObtainBestPenA }, { "ObtainPen", g_ObtainPen },
-	{ "ReleasePen", g_Nop }, { "FindColor", g_FindColor },
-	{ "GetColorMap", g_GetColorMap }, { "FreeColorMap", g_Nop },
-	{ "GetVPModeID", g_GetVPModeID },
+	{ "ReleasePen", g_Nop },
 	{ "WaitTOF", g_WaitTOF }, { "WaitBlit", g_Nop },
 	{ "OwnBlitter", g_Nop }, { "DisownBlitter", g_Nop },
 	{ "VBeamPos", g_Zero }, { "WaitBOVP", g_Nop },
@@ -1885,7 +1787,6 @@ static const struct libimpl gfx_impl[] = {
 	{ "LockLayerRom", g_Nop }, { "UnlockLayerRom", g_Nop },
 	{ "AttemptLockLayerRom", g_True },
 	{ "SetRPAttrsA", g_SetRPAttrsA }, { "GetRPAttrsA", g_GetRPAttrsA },
-	{ "ModeNotAvailable", g_Zero },
 	{ NULL, NULL }
 };
 
@@ -1894,9 +1795,11 @@ static void gfx_setup(struct Library *b)
 	GfxBase = b;            /* DefaultFont is set when wbde gives topaz */
 }
 
+extern const struct libimpl screen_gfx_impl[];
+
 struct amilib lib_graphics = {
 	.name = "graphics.library", .version = 40, .revision = 42,
-	.fd = fd_graphics, .impl = gfx_impl,
+	.fd = fd_graphics, .impl = gfx_impl, .impl3 = screen_gfx_impl,
 	.possize = 0x300,
 	.init = gfx_setup,
 };

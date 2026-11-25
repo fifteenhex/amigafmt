@@ -56,6 +56,7 @@ struct amilib {
 	int device;                     /* a device: OpenDevice, not OpenLibrary */
 	int hidden;                     /* internal: in no exec list */
 	const struct libimpl *impl2;    /* more implementations */
+	const struct libimpl *impl3;    /* and more, bound last */
 	/* filled in by lib_build() */
 	struct Library *base;
 	int nslots;

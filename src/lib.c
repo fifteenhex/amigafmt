@@ -118,6 +118,7 @@ struct Library *lib_build(struct amilib *l)
 	l->table[4] = l_null;
 	bind(l, l->impl);
 	bind(l, l->impl2);
+	bind(l, l->impl3);
 
 	neg = (l->nslots * 6 + 3) & ~3u;
 	mem = amem_alloc(neg + sizeof(struct Library) + l->possize

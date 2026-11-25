@@ -549,8 +549,16 @@ void intui_event(struct awin *a, const struct wbp_event *e)
 			put_imsg(a, IDCMP_MOUSEMOVE, 0, e->qualifier, 0, mx, my);
 		return;
 	case IDCMP_RAWKEY:
-		if (a->strgad && !(e->code & 0x80) && string_key(a, 0, e->code))
-			return;
+		if (a->strgad && !(e->code & 0x80)) {
+			/* the character from the keymap: the VANILLAKEY that
+			   follows is dropped while a string gadget is active */
+			extern int keymap_convert(int code, int qual, char *out);
+			char b[8];
+			int ch = keymap_convert(e->code, e->qualifier, b) == 1 ?
+				 (uint8_t)b[0] : 0;
+			if (string_key(a, ch, e->code))
+				return;
+		}
 		if (a->strgad && (e->code & 0x80))
 			return;
 		if (a->agad && gt_key(a, a->agad, 0, e->code, e->qualifier))
@@ -663,6 +671,8 @@ struct wspec {
 	uint32_t flags, idcmp;
 	APTR title, gadgets, screentitle;
 	int zoom;
+	uint32_t screen;                /* a custom screen, 0 Workbench */
+	uint32_t pubname;
 };
 
 static void read_tags(struct wspec *s, struct TagItem *t)
@@ -682,6 +692,9 @@ static void read_tags(struct wspec *s, struct TagItem *t)
 		case 9: s->gadgets = d; break;
 		case 11: s->title = d; break;
 		case 12: s->screentitle = d; break;
+		case 13: s->screen = d; break;          /* WA_CustomScreen */
+		case 21: s->pubname = d; break;         /* WA_PubScreenName */
+		case 22: s->screen = d; break;          /* WA_PubScreen */
 		case 15: s->minw = d; break;
 		case 16: s->minh = d; break;
 		case 17: s->maxw = d; break;
@@ -715,19 +728,34 @@ static struct Window *open_window(struct wspec *s)
 	int bl = 4, br = sizing ? 18 : 4, bb = sizing ? 10 : 2, bt;
 	uint8_t *layer;
 
+	struct ascreen *as = NULL;
+	struct Screen *scr;
+	int scrw, scrh;
+
 	if (gui_connect()) {
 		af_warn("%s: no wbde to open a window on (WBDE_SOCKET)",
 			af_progname);
 		return NULL;
 	}
-	bt = gui_screen.wbortop;
+	if (s->screen)
+		as = as_by_screen(s->screen);
+	else if (s->pubname) {
+		for (as = gui_screens; as; as = as->next)
+			if (as->pub && !strcmp(as->pubname, PTR(s->pubname)))
+				break;
+	}
+	scr = as ? as->scr : wb_screen;
+	scrw = as ? as->w : gui_screen.width;
+	scrh = as ? as->h : gui_screen.height;
+	bt = as ? as->wbortop : gui_screen.wbortop;
 	if (s->flags & WFLG_BORDERLESS)
 		bl = br = bt = bb = 0;
 	memset(&o, 0, sizeof(o));
 	o.left = s->left;
 	o.top = s->top;
-	o.width = s->iw ? s->iw : (s->width ? s->width : gui_screen.width - s->left) - bl - br;
-	o.height = s->ih ? s->ih : (s->height ? s->height : gui_screen.height - s->top) - bt - bb;
+	o.width = s->iw ? s->iw : (s->width ? s->width : scrw - s->left) - bl - br;
+	o.height = s->ih ? s->ih : (s->height ? s->height : scrh - s->top) - bt - bb;
+	o.screen = as ? as->id : 0;
 	if ((int16_t)o.width <= 0)
 		o.width = 1;
 	if ((int16_t)o.height <= 0)
@@ -769,22 +797,29 @@ static struct Window *open_window(struct wspec *s)
 	a = gui_open(&o);
 	if (!a)
 		return NULL;
+	a->as = as;
 	w = a->w;
 	rp = amem_alloc(sizeof(*rp));
 	gfx_init_rp(rp);
 	rp->FgPen = 1;
 	a->rp = rp;
 	a->bm = amem_alloc(sizeof(struct BitMap));
-	*a->bm = wb_screen->BitMap;
+	*a->bm = scr->BitMap;
 	rp->BitMap = APTR_OF(a->bm);
+	if (as) {               /* the screen's font, as Intuition gives it */
+		rp->Font = APTR_OF(as->font);
+		rp->TxHeight = as->font->tf_YSize;
+		rp->TxWidth = as->font->tf_XSize;
+		rp->TxBaseline = as->font->tf_Baseline;
+	}
 	layer = amem_alloc(160);                /* a Layer: rp, bounds, Window */
 	*(uint32_t *)(layer + 12) = APTR_OF(rp);
 	*(uint32_t *)(layer + 40) = APTR_OF(w);
 	rp->Layer = APTR_OF(layer);
 	w->RPort = APTR_OF(rp);
 	w->WLayer = APTR_OF(layer);
-	w->WScreen = APTR_OF(wb_screen);
-	w->IFont = APTR_OF(gui_topaz);
+	w->WScreen = APTR_OF(scr);
+	w->IFont = APTR_OF(as ? as->font : gui_topaz);
 	w->Flags = s->flags;
 	if (s->flags & WFLG_ACTIVATE)
 		w->Flags |= WFLG_WINDOWACTIVE;
@@ -794,14 +829,14 @@ static struct Window *open_window(struct wspec *s)
 	w->MinHeight = s->minh;
 	w->MaxWidth = s->maxw;
 	w->MaxHeight = s->maxh;
-	w->DetailPen = gui_pens[WBP_DETAILPEN];
-	w->BlockPen = gui_pens[WBP_BLOCKPEN];
+	w->DetailPen = as ? as->pens[WBP_DETAILPEN] : gui_pens[WBP_DETAILPEN];
+	w->BlockPen = as ? as->pens[WBP_BLOCKPEN] : gui_pens[WBP_BLOCKPEN];
 	w->IDCMPFlags = s->idcmp;
 	if (s->idcmp)
 		w->UserPort = APTR_OF(new_port());
 	w->FirstGadget = s->gadgets;
-	w->NextWindow = wb_screen->FirstWindow;
-	wb_screen->FirstWindow = APTR_OF(w);
+	w->NextWindow = scr->FirstWindow;
+	scr->FirstWindow = APTR_OF(w);
 	intui_render_gadgets(a, PTR(w->FirstGadget), -1);
 	return w;
 }
@@ -824,6 +859,8 @@ static void i_OpenWindow(struct frame *f)
 	s.minh = nw->MinHeight;
 	s.maxw = nw->MaxWidth;
 	s.maxh = nw->MaxHeight;
+	if ((nw->Type & 0x000F) == 0x000F)      /* CUSTOMSCREEN */
+		s.screen = nw->Screen;
 	if ((nw->Flags & WFLG_NW_EXTENDED) && nw->Extension)
 		read_tags(&s, PTR(nw->Extension));
 	RET(open_window(&s));
@@ -849,6 +886,8 @@ static void i_OpenWindowTagList(struct frame *f)
 		s.minh = nw->MinHeight;
 		s.maxw = nw->MaxWidth;
 		s.maxh = nw->MaxHeight;
+		if ((nw->Type & 0x000F) == 0x000F)
+			s.screen = nw->Screen;
 	}
 	read_tags(&s, PTR(A(1)));
 	RET(open_window(&s));
@@ -864,7 +903,8 @@ static void i_CloseWindow(struct frame *f)
 		return;
 	w = a->w;
 	free_port_msgs(a);
-	for (pp = &wb_screen->FirstWindow; *pp; pp = &((struct Window *)PTR(*pp))->NextWindow)
+	for (pp = &((struct Screen *)PTR(w->WScreen))->FirstWindow; *pp;
+	     pp = &((struct Window *)PTR(*pp))->NextWindow)
 		if (*pp == APTR_OF(w)) {
 			*pp = w->NextWindow;
 			break;
@@ -1654,36 +1694,9 @@ static void i_DisplayAlert(struct frame *f)
 
 /* ---- the screen ---- */
 
-static void i_LockPubScreen(struct frame *f)
-{
-	const char *n = A(0) ? PTR(A(0)) : NULL;
-
-	if ((n && strcmp(n, "Workbench")) || gui_connect()) {
-		RET(0);
-		return;
-	}
-	RET(wb_screen);
-}
-
 static void i_OpenWorkBench(struct frame *f)
 {
 	RET(gui_connect() ? 0 : APTR_OF(wb_screen));
-}
-
-static void i_GetScreenDrawInfo(struct frame *f)
-{
-	RET(gui_connect() ? 0 : APTR_OF(gui_dri));
-}
-
-static void i_GetScreenData(struct frame *f)
-{
-	if (gui_connect()) {
-		RET(0);
-		return;
-	}
-	memcpy(PTR(A(0)), wb_screen, D(0) < sizeof(struct Screen) ? D(0) :
-	       sizeof(struct Screen));
-	RET(1);
 }
 
 static void i_GetDefaultPubScreen(struct frame *f)
@@ -1692,17 +1705,10 @@ static void i_GetDefaultPubScreen(struct frame *f)
 		strcpy(PTR(A(0)), "Workbench");
 }
 
-static void i_ViewPortAddress(struct frame *f)
-{
-	RET(gui_connect() ? 0 : APTR_OF(&wb_screen->ViewPort));
-}
-
 static void i_NextPubScreen(struct frame *f)
 {
 	RET(0);
 }
-
-static void i_PubScreenStatus(struct frame *f) { RET(0); }
 
 static void i_LockPubScreenList(struct frame *f)
 {
@@ -1839,20 +1845,13 @@ static const struct libimpl intuition_impl[] = {
 	{ "FreeSysRequest", i_FreeSysRequest },
 	{ "AutoRequest", i_AutoRequest },
 	{ "DisplayBeep", i_DisplayBeep }, { "DisplayAlert", i_DisplayAlert },
-	{ "LockPubScreen", i_LockPubScreen }, { "UnlockPubScreen", i_Nop },
 	{ "OpenWorkBench", i_OpenWorkBench }, { "WBenchToFront", i_True },
+	{ "FreeScreenDrawInfo", i_Nop },
 	{ "WBenchToBack", i_True }, { "CloseWorkBench", i_Zero },
-	{ "GetScreenDrawInfo", i_GetScreenDrawInfo },
-	{ "FreeScreenDrawInfo", i_Nop }, { "GetScreenData", i_GetScreenData },
 	{ "GetDefaultPubScreen", i_GetDefaultPubScreen },
 	{ "SetDefaultPubScreen", i_Nop }, { "SetPubScreenModes", i_Zero },
-	{ "PubScreenStatus", i_PubScreenStatus },
 	{ "LockPubScreenList", i_LockPubScreenList },
 	{ "UnlockPubScreenList", i_Nop }, { "NextPubScreen", i_NextPubScreen },
-	{ "ViewPortAddress", i_ViewPortAddress },
-	{ "OpenScreen", i_Zero }, { "OpenScreenTagList", i_Zero },
-	{ "CloseScreen", i_True }, { "ScreenToFront", i_Nop },
-	{ "ScreenToBack", i_Nop }, { "ShowTitle", i_Nop },
 	{ "MakeScreen", i_Zero }, { "RethinkDisplay", i_Zero },
 	{ "RemakeDisplay", i_Zero }, { "ViewAddress", i_Zero },
 	{ "CurrentTime", i_CurrentTime }, { "DoubleClick", i_DoubleClick },
@@ -1878,11 +1877,12 @@ static void intuition_setup(struct Library *b)
 	exec_newlist(&imsg_port->mp_MsgList);
 }
 
-extern const struct libimpl boopsi_intuition_impl[];
+extern const struct libimpl boopsi_intuition_impl[], screen_intuition_impl[];
 
 struct amilib lib_intuition = {
 	.name = "intuition.library", .version = 40, .revision = 85,
 	.fd = fd_intuition, .impl = intuition_impl, .impl2 = boopsi_intuition_impl,
+	.impl3 = screen_intuition_impl,
 	.possize = 0x200,               /* IntuitionBase */
 	.init = intuition_setup,
 };

@@ -9,6 +9,7 @@
 /* one Intuition window: the Window structure and wbde's window behind it */
 struct awin {
 	struct Window *w;
+	struct ascreen *as;             /* its custom screen, NULL on Workbench */
 	struct RastPort *rp;
 	struct BitMap *bm;
 	uint32_t id;                    /* wbde's */
@@ -29,6 +30,36 @@ struct awin {
 	struct awin *next;
 };
 
+/* a custom screen: wbde's screen behind a Screen structure (screen.c) */
+struct ascreen {
+	struct Screen *scr;
+	uint32_t id;                    /* wbde's */
+	uint8_t *pix;                   /* the screen's own pixels, pens */
+	int w, h, stride;
+	size_t size;
+	int dirty, dx0, dy0, dx1, dy1;
+	int depth;
+	uint32_t modeid;
+	struct DrawInfo *dri;
+	uint16_t *pens;
+	struct TextFont *font;
+	uint8_t pal[256][3];
+	int pal_lo, pal_hi;             /* colours to send, -1 none */
+	uint8_t *cm;                    /* the ViewPort's ColorMap */
+	int barh, wbortop;
+	int pub, publocks;
+	char pubname[64];
+	struct ascreen *next;           /* front to back */
+};
+extern struct ascreen *gui_screens;
+struct ascreen *as_by_screen(uint32_t scr);
+struct ascreen *as_by_rp(struct RastPort *rp);
+void as_damage(struct ascreen *as, int x0, int y0, int x1, int y1);
+void as_flush(void);
+void as_set_title(struct ascreen *as, const char *title, int show);
+void mode_size(uint32_t id, int *w, int *h);
+int mode_known(uint32_t id);
+
 extern struct awin *gui_wins;
 extern struct wbp_screen gui_screen;
 extern struct Screen *wb_screen;
@@ -47,6 +78,10 @@ void gui_damage(struct awin *a, int x0, int y0, int x1, int y1);
 void gui_flush(void);
 int gui_pump(int timeout_ms);
 int gui_obtain_pen(uint8_t r, uint8_t g, uint8_t b);
+int gui_call(uint32_t type, uint32_t win, const void *p, uint32_t len, uint32_t reply,
+	     void *out, size_t outlen, int *outfd, uint32_t *outwin);
+void *gui_map(int fd, size_t size);
+void gui_unmap(void *p, size_t size);
 struct awin *gui_by_window(APTR w);
 struct awin *gui_by_rp(APTR rp);
 
