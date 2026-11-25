@@ -407,6 +407,21 @@ static void deliver_raw(struct awin *a)
 
 void intui_easy_event(struct awin *a, const struct wbp_event *e);
 
+/* a custom screen's title bar says the active window's screen title, or
+   the screen's own */
+static void screen_title(struct awin *a)
+{
+	struct Screen *s;
+	uint32_t t;
+
+	if (!a->as)
+		return;
+	s = a->as->scr;
+	t = a->w->ScreenTitle ? a->w->ScreenTitle : s->DefaultTitle;
+	s->Title = t;
+	as_set_title(a->as, t ? PTR(t) : "", -1);
+}
+
 void intui_event(struct awin *a, const struct wbp_event *e)
 {
 	struct Window *w = a->w;
@@ -423,10 +438,15 @@ void intui_event(struct awin *a, const struct wbp_event *e)
 	if (e->class != IDCMP_VANILLAKEY)
 		deliver_raw(a);
 	if (e->class & (IDCMP_MOUSEBUTTONS | IDCMP_MOUSEMOVE)) {
+		struct Screen *s = PTR(w->WScreen);
 		w->MouseX = mx;
 		w->MouseY = my;
 		w->GZZMouseX = e->mousex;
 		w->GZZMouseY = e->mousey;
+		if (s) {
+			s->MouseX = w->LeftEdge + mx;
+			s->MouseY = w->TopEdge + my;
+		}
 	}
 	switch (e->class) {
 	case IDCMP_MOUSEBUTTONS:
@@ -587,6 +607,7 @@ void intui_event(struct awin *a, const struct wbp_event *e)
 	}
 	case IDCMP_ACTIVEWINDOW:
 		w->Flags |= WFLG_WINDOWACTIVE;
+		screen_title(a);
 		break;
 	case IDCMP_INACTIVEWINDOW:
 		w->Flags &= ~WFLG_WINDOWACTIVE;
@@ -944,8 +965,11 @@ static void i_SetWindowTitles(struct frame *f)
 		w->Title = A(1);
 		gui_send(WBP_SET_TITLE, a->id, t, strlen(t));
 	}
-	if (A(2) != 0xffffffff)
+	if (A(2) != 0xffffffff) {
 		w->ScreenTitle = A(2);
+		if (w->Flags & WFLG_WINDOWACTIVE)
+			screen_title(a);
+	}
 }
 
 static void i_ActivateWindow(struct frame *f)
@@ -1454,7 +1478,35 @@ void intui_easy_event(struct awin *a, const struct wbp_event *e)
 		a->easy_result = 0;
 }
 
-static struct awin *easy_open(const char *title, const char *body,
+/* centred on its screen */
+static void plain_place(struct wspec *s, int iw, int ih)
+{
+	struct ascreen *as = s->screen ? as_by_screen(s->screen) : NULL;
+	int w = as ? as->w : gui_screen.width, h = as ? as->h : gui_screen.height;
+
+	s->left = (w - iw - 8) / 2;
+	s->top = (h - ih - 14) / 2;
+	if (s->left < 0)
+		s->left = 0;
+	if (s->top < 0)
+		s->top = 0;
+}
+
+/* a DrawInfo pen of the window's screen */
+int intui_pen(struct awin *a, int pen)
+{
+	return a && a->as ? a->as->pens[pen] : gui_pens[pen];
+}
+
+/* the screen a requester goes on: its window's, else Workbench (0) */
+static uint32_t screen_of_window(uint32_t win)
+{
+	struct awin *a = win ? gui_by_window(win) : NULL;
+
+	return a && a->as ? APTR_OF(a->as->scr) : 0;
+}
+
+static struct awin *easy_open(uint32_t screen, const char *title, const char *body,
 			      const char *gadgets)
 {
 	char *lines[32], *gl[16], bodyc[2048], gadc[1024];
@@ -1488,8 +1540,8 @@ static struct awin *easy_open(const char *title, const char *body,
 	memset(&s, 0, sizeof(s));
 	s.iw = iw;
 	s.ih = ih;
-	s.left = (gui_screen.width - iw) / 2;
-	s.top = (gui_screen.height - ih) / 2;
+	s.screen = screen;
+	plain_place(&s, iw, ih);
 	s.flags = WFLG_DRAGBAR | WFLG_DEPTHGADGET | WFLG_ACTIVATE | WFLG_RMBTRAP;
 	s.title = APTR_OF(strcpy(amem_alloc(strlen(title) + 1), title));
 	win = open_window(&s);
@@ -1529,8 +1581,9 @@ static struct awin *easy_open(const char *title, const char *body,
 	return a;
 }
 
-/* a centred, activated window of ours with a cleared inner area */
-struct awin *intui_open_plain(const char *title, int iw, int ih)
+/* a centred, activated window of ours with a cleared inner area, on a
+   custom screen (0: Workbench) */
+struct awin *intui_open_plain(uint32_t screen, const char *title, int iw, int ih)
 {
 	struct wspec s;
 	struct Window *win;
@@ -1541,8 +1594,8 @@ struct awin *intui_open_plain(const char *title, int iw, int ih)
 	memset(&s, 0, sizeof(s));
 	s.iw = iw;
 	s.ih = ih;
-	s.left = (gui_screen.width - iw) / 2;
-	s.top = (gui_screen.height - ih) / 2;
+	s.screen = screen;
+	plain_place(&s, iw, ih);
 	s.flags = WFLG_DRAGBAR | WFLG_DEPTHGADGET | WFLG_ACTIVATE | WFLG_RMBTRAP |
 		  WFLG_CLOSEGADGET;
 	s.title = APTR_OF(strcpy(amem_alloc(strlen(title) + 1), title));
@@ -1551,7 +1604,7 @@ struct awin *intui_open_plain(const char *title, int iw, int ih)
 		return NULL;
 	a = gui_by_window(APTR_OF(win));
 	gfx_rectfill(a->rp, a->bl, a->bt, a->bl + a->iw - 1, a->bt + a->ih - 1,
-		     gui_pens[WBP_BACKGROUNDPEN]);
+		     intui_pen(a, WBP_BACKGROUNDPEN));
 	return a;
 }
 
@@ -1593,7 +1646,7 @@ static void i_EasyRequestArgs(struct frame *f)
 	}
 	format_easy(es, A(3), &body, &gad);
 	title = es[2] ? PTR(es[2]) : "Request";
-	a = easy_open(title, body.s, gad.s);
+	a = easy_open(screen_of_window(A(0)), title, body.s, gad.s);
 	RET(a ? easy_wait(a) : ask_tty(title, body.s, gad.s));
 }
 
@@ -1608,7 +1661,7 @@ static void i_BuildEasyRequestArgs(struct frame *f)
 		return;
 	}
 	format_easy(es, A(3), &body, &gad);
-	a = easy_open(es[2] ? PTR(es[2]) : "Request", body.s, gad.s);
+	a = easy_open(screen_of_window(A(0)), es[2] ? PTR(es[2]) : "Request", body.s, gad.s);
 	RET(a ? APTR_OF(a->w) : 1);     /* 1: "it was answered at once" */
 }
 
@@ -1660,7 +1713,7 @@ static void i_AutoRequest(struct frame *f)
 		snprintf(g, sizeof(g), "%s|%s", pos, neg);
 	else
 		snprintf(g, sizeof(g), "%s", neg);
-	a = easy_open("System Request", body, g);
+	a = easy_open(screen_of_window(A(0)), "System Request", body, g);
 	if (a)
 		RET(*pos ? easy_wait(a) == 1 : (easy_wait(a), 0));
 	else
@@ -1763,6 +1816,43 @@ static void i_SetWindowPointerA(struct frame *f)
 		gui_send(WBP_SET_POINTER, a->id, &busy, sizeof(busy));
 }
 
+/*
+ * SetPointer(window, data, height, width, xoffset, yoffset): a sprite, two
+ * control words, then two words a row (plane 0, plane 1), colours 17-19.
+ */
+static void i_SetPointer(struct frame *f)
+{
+	struct awin *a = gui_by_window(A(0));
+	const uint16_t *d = PTR(A(1));
+	int h = (int16_t)D(0), w = (int16_t)D(1), x, y;
+	uint8_t buf[sizeof(struct wbp_pointer) + 16 * 256];
+	struct wbp_pointer *wp = (struct wbp_pointer *)buf;
+	uint8_t *px = buf + sizeof(*wp);
+
+	if (!a || !d || h <= 0 || h > 256)
+		return;
+	if (w <= 0 || w > 16)
+		w = 16;
+	wp->kind = WBP_PTR_IMAGE;
+	wp->hx = -(int16_t)D(2);
+	wp->hy = -(int16_t)D(3);
+	wp->width = w;
+	wp->height = h;
+	for (y = 0; y < h; y++)
+		for (x = 0; x < w; x++) {
+			int b0 = (d[2 + 2 * y] >> (15 - x)) & 1;
+			int b1 = (d[3 + 2 * y] >> (15 - x)) & 1;
+			int c = b1 << 1 | b0;
+			px[y * w + x] = c ? 16 + c : 0;
+		}
+	a->w->Pointer = A(1);
+	a->w->PtrHeight = h;
+	a->w->PtrWidth = w;
+	a->w->XOffset = D(2);
+	a->w->YOffset = D(3);
+	gui_send(WBP_SET_POINTER, a->id, buf, sizeof(*wp) + w * h);
+}
+
 static void i_ClearPointer(struct frame *f)
 {
 	struct awin *a = gui_by_window(A(0));
@@ -1857,7 +1947,7 @@ static const struct libimpl intuition_impl[] = {
 	{ "CurrentTime", i_CurrentTime }, { "DoubleClick", i_DoubleClick },
 	{ "GetPrefs", i_GetPrefs }, { "GetDefPrefs", i_GetPrefs },
 	{ "SetPrefs", i_Zero },
-	{ "SetPointer", i_Nop }, { "ClearPointer", i_ClearPointer },
+	{ "SetPointer", i_SetPointer }, { "ClearPointer", i_ClearPointer },
 	{ "SetWindowPointerA", i_SetWindowPointerA },
 	{ "AllocRemember", i_AllocRemember }, { "FreeRemember", i_FreeRemember },
 	{ "LockIBase", i_Zero }, { "UnlockIBase", i_Nop },

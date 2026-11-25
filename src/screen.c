@@ -309,6 +309,42 @@ static void g_GetDisplayInfoData(struct frame *f)
 	RET(n < size ? n : size);
 }
 
+/* for asl: the modes in order, and a mode's NameInfo and DimensionInfo */
+uint32_t gfx_next_mode(uint32_t last)
+{
+	int i, m, found = last == INVALID_ID;
+
+	for (m = 0; m < 2; m++)
+		for (i = 0; i < NMODES; i++) {
+			uint32_t id = monitors[m] | modes[i].key;
+			if (found)
+				return id;
+			if (id == last)
+				found = 1;
+		}
+	return INVALID_ID;
+}
+
+int gfx_mode_info(uint32_t id, uint8_t *name, uint8_t *dims)
+{
+	struct frame f;
+
+	memset(&f, 0, sizeof(f));
+	f.a[1] = APTR_OF(name);
+	f.d[0] = 56;
+	f.d[1] = 0x80003000;
+	f.d[2] = id;
+	g_GetDisplayInfoData(&f);
+	if (!f.d[0])
+		return 0;
+	f.a[1] = APTR_OF(dims);
+	f.d[0] = 88;
+	f.d[1] = 0x80001000;
+	f.d[2] = id;
+	g_GetDisplayInfoData(&f);
+	return f.d[0] != 0;
+}
+
 static void g_ModeNotAvailable(struct frame *f)
 {
 	RET(mode_known(D(0)) ? 0 : 0x0001);    /* DI_AVAIL_NOCHIPS */

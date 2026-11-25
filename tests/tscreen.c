@@ -158,6 +158,14 @@ int main(u32 arglen, char *args)
 	win = (void *)call(IntuitionBase, LVOOpenWindowTagList, "a0a1", 0, wt);
 	printf("windows %s %s\n", bd ? "backdrop" : "-", win ? "titled" : "-");
 	if (win) {
+		/* a crosshair pointer while the window is active (SetPointer) */
+		static const u16 cross[2 + 2 * 7 + 2] = {
+			0, 0,
+			0x1000, 0, 0x1000, 0, 0x1000, 0, 0xee00, 0x1000,
+			0x1000, 0, 0x1000, 0, 0x1000, 0,
+			0, 0,
+		};
+		call(IntuitionBase, LVOSetPointer, "a0a1d0d1d2d3", win, cross, 7, 16, -3, -3);
 		call(GfxBase, LVOSetAPen, "a1d0", WIN_RP(win), 3);
 		call(GfxBase, LVOMove, "a1d0d1", WIN_RP(win), 10, 24);
 		call(GfxBase, LVOText, "a1a0d0", WIN_RP(win), "blue on grey", 12);

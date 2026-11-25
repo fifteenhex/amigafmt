@@ -89,7 +89,8 @@ struct awin *gui_by_rp(APTR rp);
 void intui_event(struct awin *a, const struct wbp_event *e);
 void intui_resized(struct awin *a);
 void intui_render_gadgets(struct awin *a, struct Gadget *g, int n);
-struct awin *intui_open_plain(const char *title, int iw, int ih);
+struct awin *intui_open_plain(uint32_t screen, const char *title, int iw, int ih);
+int intui_pen(struct awin *a, int pen);
 void asl_event(struct awin *a, const struct wbp_event *e);
 
 /* gfx.c: drawing on a RastPort */
