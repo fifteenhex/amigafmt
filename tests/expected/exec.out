@@ -1,0 +1,19 @@
+node two pri 5
+node one pri 0
+node three pri -5
+FindName: three
+RemHead: two, next one
+AllocMem aligned 1 cleared 1
+CopyMem: copied
+AllocVec ok
+FindTask(0) is ThisTask: 1
+SetSignal old has ^C: 1
+now: 0
+utility opened
+UMult32 7006652
+SDivMod32 -14 rem -2
+UMult64 lo 0 hi 2
+Stricmp 0 -1
+missing library: 0
+dos too new: 0
+rc=5

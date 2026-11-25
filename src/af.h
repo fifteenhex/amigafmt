@@ -32,7 +32,7 @@ struct fdent {
 	const char *name, *regs;
 };
 
-extern const struct fdent fd_exec[], fd_dos[];
+extern const struct fdent fd_exec[], fd_dos[], fd_utility[];
 
 struct libimpl {
 	const char *name;
@@ -55,7 +55,7 @@ struct amilib {
 	int index;
 };
 
-extern struct amilib lib_exec, lib_dos;
+extern struct amilib lib_exec, lib_dos, lib_utility, lib_version;
 extern struct amilib *all_libs[];
 
 struct Library *lib_build(struct amilib *l);
@@ -67,6 +67,7 @@ extern struct frame *resume_frame;
 /* globals */
 extern struct ExecBase *SysBase;
 extern struct DosLibrary *DOSBase;
+extern struct Library *UtilityBase;
 extern struct Process *me;
 extern int af_trace;
 extern const char *af_progname;

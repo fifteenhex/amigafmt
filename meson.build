@@ -30,7 +30,8 @@ endif
 srcs = files(
   'src/main.c', 'src/lib.c', 'src/hunk.c', 'src/amem.c', 'src/path.c',
   'src/exec.c', 'src/fmt.c', 'src/dos.c', 'src/lock.c', 'src/readargs.c',
-  'src/pattern.c', 'src/date.c', 'src/fdtab.c', 'src/glue.S')
+  'src/pattern.c', 'src/date.c', 'src/utility.c', 'src/fdtab.c',
+  'src/glue.S')
 amigafmt = executable('amigafmt', srcs,
   install: true)
 
@@ -40,7 +41,7 @@ install_data('amigafmt.conf.example', install_dir: get_option('datadir') / 'amig
 install_data('README.md', install_dir: get_option('datadir') / 'doc' / 'amigafmt')
 
 # the vector tables, regenerated from the .fd files into the source tree
-fds = ['exec', 'dos']
+fds = ['exec', 'dos', 'utility']
 run_target('fdtab',
   command: [files('tools/fdtab.sh'), files('tools/fd2c.py'),
             meson.current_source_dir() / 'src' / 'fdtab.c', get_option('fd_dir')] + fds)

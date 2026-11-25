@@ -11,7 +11,7 @@ foreach p : ['hello', 'abs4', 'crash']
   progs += {p: custom_target(p, input: p + '.S', output: p, build_by_default: true,
                              command: [mkprog, cc_cmd, mkhunk, '@OUTPUT@', '@INPUT@'])}
 endforeach
-foreach p : ['targs', 'tfmt', 'tfiles', 'tunimpl', 'tpat']
+foreach p : ['targs', 'tfmt', 'tfiles', 'texec', 'tunimpl', 'tpat']
   progs += {p: custom_target(p, input: ['start.S', 'lib.c', p + '.c'], output: p, build_by_default: true,
                              command: [mkprog, cc_cmd, mkhunk, '@OUTPUT@', '@INPUT@'])}
 endforeach
@@ -30,6 +30,7 @@ cases = [
   ['args5', '0', [], 'targs', ['one', 'TOG', 'two']],
   ['fmt', '0', [], 'tfmt', []],
   ['files', '0', [], 'tfiles', []],
+  ['exec', '5', [], 'texec', []],
   ['unimpl', '20', [], 'tunimpl', []],
   ['pattern', '0', [], 'tpat', []],
 ]

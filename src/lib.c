@@ -19,7 +19,8 @@
 
 extern void lvo_common(void);
 
-struct amilib *all_libs[] = { &lib_exec, &lib_dos,
+struct amilib *all_libs[] = { &lib_exec, &lib_dos, &lib_utility,
+			      &lib_version,
 			      NULL };
 struct frame *resume_frame;
 

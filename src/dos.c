@@ -1577,6 +1577,7 @@ static void dos_setup(struct Library *b)
 	d->dl_Root = APTR_OF(rn);
 	date_now(&rn->rn_Time);
 	exec_newlist(&rn->rn_CliList);
+	d->dl_UtilityBase = APTR_OF(lib_build(&lib_utility));
 	fs_port = amem_alloc(sizeof(*fs_port));
 	fs_port->mp_Node.ln_Type = NT_MSGPORT;
 	fs_port->mp_Flags = 2;                          /* PA_IGNORE */
