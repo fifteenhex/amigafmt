@@ -10,6 +10,11 @@ send = 5
 WaitSelect(sent) = 1, ready 1, FIONREAD 5
 recv = 5 "hello"
 reply = 6 "world!"
+Dup2Socket = 3, send through it 3, close 0
+the client got "dup"
+second base 1, unique id 1, obtained 0, twice -1
+the server got "obtained" from it; the original still sends 0
+Dup2Socket(-1, 7) = 7, then send -1 errno 38
 SO_TYPE 1
 recv with SO_RCVTIMEO = -1, errno 35
 send(40) = -1, errno 9, Errno() 9

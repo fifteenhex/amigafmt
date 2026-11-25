@@ -18,7 +18,11 @@
 #define LVOIoctlSocket (-114)
 #define LVOCloseSocket (-120)
 #define LVOWaitSelect (-126)
+#define LVOObtainSocket (-144)
+#define LVOReleaseSocket (-150)
+#define LVOReleaseCopyOfSocket (-156)
 #define LVOErrno (-162)
+#define LVODup2Socket (-264)
 #define LVOSetErrnoPtr (-168)
 
 #define FIONBIO 0x8004667e
@@ -117,6 +121,36 @@ int main(u32 arglen, char *args)
 	n = call(sb, LVOrecv, "d0a0d1d2", cs, buf, sizeof(buf) - 1, 0);
 	buf[n > 0 ? n : 0] = 0;
 	printf("reply = %ld \"%s\"\n", n, buf);
+
+	/* a copy of a descriptor, and a socket handed to another opener */
+	v = call(sb, LVODup2Socket, "d0d1", ss, -1);
+	n = call(sb, LVOsend, "d0a0d1d2", v, "dup", 3, 0);
+	printf("Dup2Socket = %ld, send through it %ld, close %ld\n", v, n,
+	       call(sb, LVOCloseSocket, "d0", v));
+	n = call(sb, LVOrecv, "d0a0d1d2", cs, buf, sizeof(buf) - 1, 0);
+	buf[n > 0 ? n : 0] = 0;
+	printf("the client got \"%s\"\n", buf);
+	{
+		void *sb2 = (void *)call(SysBase, LVOOpenLibrary, "a1d0",
+					 "bsdsocket.library", 4);
+		s32 id = call(sb, LVOReleaseCopyOfSocket, "d0d1", cs, -1);
+		s32 fd2 = call(sb2, LVOObtainSocket, "d0d1d2d3", id, 2, 1, 0);
+		s32 again = call(sb2, LVOObtainSocket, "d0d1d2d3", id, 2, 1, 0);
+		printf("second base %ld, unique id %ld, obtained %ld, twice %ld\n",
+		       sb2 != sb, id > 65535, fd2, again);
+		n = call(sb2, LVOsend, "d0a0d1d2", fd2, "obtained", 8, 0);
+		call(sb2, LVOCloseSocket, "d0", fd2);
+		call(SysBase, LVOCloseLibrary, "a1", sb2);
+		n = call(sb, LVOrecv, "d0a0d1d2", ss, buf, sizeof(buf) - 1, 0);
+		buf[n > 0 ? n : 0] = 0;
+		printf("the server got \"%s\" from it; the original still sends %ld\n",
+		       buf, call(sb, LVOsend, "d0a0d1d2", cs, "", 0, 0));
+		id = call(sb, LVODup2Socket, "d0d1", -1, 7);
+		n = call(sb, LVOsend, "d0a0d1d2", 7, "x", 1, 0);
+		printf("Dup2Socket(-1, 7) = %ld, then send %ld errno %ld\n", id,
+		       n, err);
+		call(sb, LVOCloseSocket, "d0", 7);
+	}
 
 	/* options */
 	len = 4;
