@@ -24,7 +24,7 @@ struct amilib *all_libs[] = { &lib_exec, &lib_dos, &lib_utility,
 			      &lib_gadtools, &lib_mathieeedoubbas,
 			      &lib_mathieeedoubtrans, &lib_mathieeesingbas,
 			      &lib_mathieeesingtrans, &lib_mathffp,
-			      &lib_mathtrans,
+			      &lib_mathtrans, &lib_timer,
 			      NULL };
 struct frame *resume_frame;
 int dispatch_all_regs;

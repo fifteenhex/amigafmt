@@ -33,7 +33,7 @@ srcs = files(
   'src/main.c', 'src/lib.c', 'src/hunk.c', 'src/amem.c', 'src/path.c',
   'src/exec.c', 'src/fmt.c', 'src/dos.c', 'src/lock.c', 'src/readargs.c',
   'src/pattern.c', 'src/date.c', 'src/utility.c', 'src/intuition.c',
-  'src/math.c', 'src/fdtab.c', 'src/glue.S')
+  'src/math.c', 'src/timer.c', 'src/fdtab.c', 'src/glue.S')
 amigafmt = executable('amigafmt', srcs,
   dependencies: [libm],
   install: true)
@@ -52,3 +52,10 @@ run_target('fdtab',
             meson.current_source_dir() / 'src' / 'fdtab.c', get_option('fd_dir')] + fds)
 
 subdir('tests')
+
+if get_option('ndk_fd_dir') != ''
+  test('fdcheck', python, args: [files('tools/fdcheck.py'), get_option('ndk_fd_dir')],
+       suite: 'tables')
+else
+  message('ndk_fd_dir not set: the fdcheck test is not run')
+endif

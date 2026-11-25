@@ -63,7 +63,7 @@ struct amilib {
 extern struct amilib lib_exec, lib_dos, lib_utility, lib_version,
 	lib_intuition, lib_graphics, lib_gadtools, lib_mathieeedoubbas,
 	lib_mathieeedoubtrans, lib_mathieeesingbas, lib_mathieeesingtrans,
-	lib_mathffp, lib_mathtrans;
+	lib_mathffp, lib_mathtrans, lib_timer;
 extern struct amilib *all_libs[];
 
 struct Library *lib_build(struct amilib *l);
@@ -100,11 +100,13 @@ void path_set_cwd(const char *lpath);
 char *path_to_amiga(const char *lpath);
 void path_dump(FILE *f);
 
+/* timer.device */
+int64_t timer_poll(void);
+void timer_sleep(int64_t us);
+
 /* exec */
 void exec_init(void);
 void exec_pending_break(void);
-void exec_newlist(void *l);
-void exec_addtail(void *l, void *n);
 
 /* dos */
 void dos_init(int argc, char **argv, const char *prog, BPTR seg, uint32_t stack);

@@ -353,3 +353,11 @@
 #define LVOSPDiv (-84)
 #define LVOSPFloor (-90)
 #define LVOSPCeil (-96)
+/* timer.device, from timer_lib.fd (bias 42); BeginIO/AbortIO are every device's */
+#define LVOBeginIO (-30)
+#define LVOAbortIODev (-36)
+#define LVOAddTime (-42)
+#define LVOSubTime (-48)
+#define LVOCmpTime (-54)
+#define LVOReadEClock (-60)
+#define LVOGetSysTime (-66)

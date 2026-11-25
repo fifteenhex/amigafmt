@@ -357,6 +357,15 @@ static void e_Wait(struct frame *f)
 			RET(got);
 			return;
 		}
+		{
+			int64_t us = timer_poll();      /* timer.device */
+			if (t->tc_SigRecvd & mask)
+				continue;
+			if (us >= 0) {
+				timer_sleep(us);
+				continue;
+			}
+		}
 		if (!(mask & 0xf000)) {
 			dos_flush_all();
 			af_die("%s: Wait($%x) for a signal nothing can send "
@@ -547,11 +556,17 @@ static void e_DeleteIORequest(struct frame *f)
 	amem_free(PTR(A(0)));
 }
 
-/* no devices yet: IOERR_OPENFAIL */
+/* timer.device is the only device; anything else: IOERR_OPENFAIL */
+extern int timer_open(const char *name, uint32_t unit, void *io);
+extern void timer_close(void *io);
+extern void io_DoIO(struct frame *f), io_SendIO(struct frame *f),
+	io_WaitIO(struct frame *f), io_CheckIO(struct frame *f),
+	io_AbortIO(struct frame *f);
+
 static void e_OpenDevice(struct frame *f)
 {
 	uint8_t *io = PTR(A(1));
-	int r = -1;
+	int r = io ? timer_open(PTR(A(0)), D(0), io) : -1;
 
 	if (r && af_trace)
 		af_warn("OpenDevice(\"%s\") refused: no such device",
@@ -563,6 +578,8 @@ static void e_OpenDevice(struct frame *f)
 
 static void e_CloseDevice(struct frame *f)
 {
+	if (A(1))
+		timer_close(PTR(A(1)));
 }
 
 /* ---- semaphores (single task: always available) ---- */
@@ -794,9 +811,9 @@ static void e_StackSwap(struct frame *f)
 }
 
 static const struct libimpl exec_impl[] = {
+	{ "Supervisor", e_Supervisor },
 	{ "Disable", e_Nop }, { "Enable", e_Nop },
 	{ "Forbid", e_Nop }, { "Permit", e_Nop },
-	{ "Supervisor", e_Supervisor },
 	{ "SetSR", e_Zero }, { "SuperState", e_Zero }, { "UserState", e_Nop },
 	{ "GetCC", e_Zero }, { "Debug", e_Nop }, { "Alert", e_Alert },
 	{ "Insert", e_Insert }, { "AddHead", e_AddHead },
@@ -826,6 +843,8 @@ static const struct libimpl exec_impl[] = {
 	{ "CreateIORequest", e_CreateIORequest },
 	{ "DeleteIORequest", e_DeleteIORequest },
 	{ "OpenDevice", e_OpenDevice }, { "CloseDevice", e_CloseDevice },
+	{ "DoIO", io_DoIO }, { "SendIO", io_SendIO }, { "WaitIO", io_WaitIO },
+	{ "CheckIO", io_CheckIO }, { "AbortIO", io_AbortIO },
 	{ "OpenResource", e_Zero },
 	{ "InitSemaphore", e_InitSemaphore },
 	{ "ObtainSemaphore", e_Nop }, { "ReleaseSemaphore", e_Nop },
