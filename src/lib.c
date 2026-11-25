@@ -25,7 +25,7 @@ struct amilib *all_libs[] = { &lib_exec, &lib_dos, &lib_utility,
 			      &lib_mathieeedoubtrans, &lib_mathieeesingbas,
 			      &lib_mathieeesingtrans, &lib_mathffp,
 			      &lib_mathtrans, &lib_timer, &lib_icon, &lib_layers,
-			      &lib_workbench,
+			      &lib_boopsi, &lib_workbench,
 			      &lib_datatypes,
 			      NULL };
 struct frame *resume_frame;
@@ -79,9 +79,21 @@ static int fd_slots(const struct fdent *fd)
 	return n;
 }
 
+static void bind(struct amilib *l, const struct libimpl *im)
+{
+	for (; im && im->name; im++) {
+		const struct fdent *e;
+		for (e = l->fd; e && e->name; e++)
+			if (!strcmp(e->name, im->name))
+				break;
+		if (!e || !e->name)
+			af_die("internal: %s has no vector %s", l->name, im->name);
+		l->table[e->bias / 6] = im->fn;
+	}
+}
+
 struct Library *lib_build(struct amilib *l)
 {
-	const struct libimpl *im;
 	uint32_t neg, *stubs;
 	uint16_t *jt;
 	char *mem;
@@ -104,15 +116,8 @@ struct Library *lib_build(struct amilib *l)
 	l->table[2] = l_close;
 	l->table[3] = l_null;
 	l->table[4] = l_null;
-	for (im = l->impl; im && im->name; im++) {
-		const struct fdent *e;
-		for (e = l->fd; e && e->name; e++)
-			if (!strcmp(e->name, im->name))
-				break;
-		if (!e || !e->name)
-			af_die("internal: %s has no vector %s", l->name, im->name);
-		l->table[e->bias / 6] = im->fn;
-	}
+	bind(l, l->impl);
+	bind(l, l->impl2);
 
 	neg = (l->nslots * 6 + 3) & ~3u;
 	mem = amem_alloc(neg + sizeof(struct Library) + l->possize

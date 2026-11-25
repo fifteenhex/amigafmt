@@ -1007,8 +1007,9 @@ void exec_init(void)
 
 	lib_build(&lib_exec);
 	for (i = 0; all_libs[i]; i++)
-		addtail(all_libs[i]->device ? &SysBase->DeviceList :
-			&SysBase->LibList, &lib_build(all_libs[i])->lib_Node);
+		if (!all_libs[i]->hidden)
+			addtail(all_libs[i]->device ? &SysBase->DeviceList :
+				&SysBase->LibList, &lib_build(all_libs[i])->lib_Node);
 	memset(&sa, 0, sizeof(sa));
 	sa.sa_handler = on_signal;
 	sigaction(SIGINT, &sa, NULL);

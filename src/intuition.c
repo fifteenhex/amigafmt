@@ -250,6 +250,10 @@ static void render_one(struct awin *a, struct Gadget *g)
 		return;
 	if (gt_render(a, g))
 		return;
+	if (boopsi_is_custom(g)) {
+		boopsi_render(a, g);
+		return;
+	}
 	gbox(a, g, &x, &y, &w, &h);
 	if (type == GTYP_PROPGADGET) {
 		render_prop(a, g, x, y, w, h);
@@ -299,7 +303,8 @@ static struct Gadget *hit(struct awin *a, int x, int y)
 			continue;
 		gbox(a, g, &gx, &gy, &gw, &gh);
 		if (x >= gx && y >= gy && x < gx + gw && y < gy + gh &&
-		    !(g->Flags & GFLG_DISABLED))
+		    !(g->Flags & GFLG_DISABLED) &&
+		    (!boopsi_is_custom(g) || boopsi_hittest(a, g, x - gx, y - gy)))
 			return g;
 	}
 	return NULL;
@@ -431,6 +436,17 @@ void intui_event(struct awin *a, const struct wbp_event *e)
 				a->agad_in = 1;
 				if (gt_handle_down(a, g, mx, my))
 					return;
+				if (boopsi_is_custom(g)) {
+					int gx, gy, gw, gh;
+					gbox(a, g, &gx, &gy, &gw, &gh);
+					if (g->Activation & GACT_IMMEDIATE)
+						put_imsg(a, IDCMP_GADGETDOWN, 0,
+							 e->qualifier, APTR_OF(g), mx, my);
+					if (!boopsi_input(a, g, 1, SELECTDOWN,
+							  e->qualifier, mx - gx, my - gy))
+						a->agad = NULL;
+					return;
+				}
 				if (type == GTYP_STRGADGET) {
 					struct StringInfo *si = PTR(g->SpecialInfo);
 					a->strgad = g;
@@ -463,6 +479,14 @@ void intui_event(struct awin *a, const struct wbp_event *e)
 			struct Gadget *g = a->agad;
 			int in = inside(a, g, mx, my);
 			a->agad = NULL;
+			if (boopsi_is_custom(g)) {
+				int gx, gy, gw, gh;
+				gbox(a, g, &gx, &gy, &gw, &gh);
+				if (boopsi_input(a, g, 0, SELECTUP, e->qualifier,
+						 mx - gx, my - gy))
+					a->agad = g;
+				return;
+			}
 			if (gt_handle_up(a, g, mx, my, in))
 				return;
 			if ((g->GadgetType & GTYP_GTYPEMASK) == GTYP_PROPGADGET) {
@@ -488,6 +512,17 @@ void intui_event(struct awin *a, const struct wbp_event *e)
 		if (a->agad) {
 			struct Gadget *g = a->agad;
 			int in = inside(a, g, mx, my);
+			if (boopsi_is_custom(g)) {
+				int gx, gy, gw, gh;
+				gbox(a, g, &gx, &gy, &gw, &gh);
+				if (!boopsi_input(a, g, 0, 0xff, e->qualifier,
+						  mx - gx, my - gy))
+					a->agad = NULL;
+				if (g->Activation & GACT_FOLLOWMOUSE)
+					put_imsg(a, IDCMP_MOUSEMOVE, 0, e->qualifier,
+						 APTR_OF(g), mx, my);
+				return;
+			}
 			if (gt_handle_move(a, g, mx, my))
 				return;
 			if ((g->GadgetType & GTYP_GTYPEMASK) == GTYP_PROPGADGET)
@@ -1085,7 +1120,12 @@ static void i_DrawImage(struct frame *f)
 
 static void i_DrawImageState(struct frame *f)
 {
-	gfx_drawimage(PTR(A(0)), PTR(A(1)), (int16_t)D(0), (int16_t)D(1));
+	struct Image *im = PTR(A(1));
+
+	if (im && im->Depth == -1)
+		boopsi_drawimage(PTR(A(0)), im, (int16_t)D(0), (int16_t)D(1), D(2));
+	else
+		gfx_drawimage(PTR(A(0)), im, (int16_t)D(0), (int16_t)D(1));
 }
 
 static void i_PrintIText(struct frame *f)
@@ -1808,9 +1848,11 @@ static void intuition_setup(struct Library *b)
 	exec_newlist(&imsg_port->mp_MsgList);
 }
 
+extern const struct libimpl boopsi_intuition_impl[];
+
 struct amilib lib_intuition = {
 	.name = "intuition.library", .version = 40, .revision = 85,
-	.fd = fd_intuition, .impl = intuition_impl,
+	.fd = fd_intuition, .impl = intuition_impl, .impl2 = boopsi_intuition_impl,
 	.possize = 0x200,               /* IntuitionBase */
 	.init = intuition_setup,
 };

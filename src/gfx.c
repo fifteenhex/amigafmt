@@ -476,6 +476,10 @@ void gfx_drawimage(struct RastPort *rp, struct Image *im, int x0, int y0)
 {
 	struct surf s;
 
+	if (im && im->Depth == -1) {           /* a BOOPSI image */
+		boopsi_drawimage(rp, im, x0, y0, 0);
+		return;
+	}
 	if (!surf_open(rp, &s))
 		return;
 	for (; im; im = PTR(im->NextImage)) {

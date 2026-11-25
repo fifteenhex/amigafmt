@@ -71,6 +71,15 @@ void gfx_init_rp(struct RastPort *rp);
 void gfx_bevel(struct RastPort *rp, int x, int y, int w, int h, int recessed);
 struct TextFont *gfx_font_for(struct TextAttr *ta);
 
+/* boopsi.c */
+int boopsi_is_custom(struct Gadget *g);
+void boopsi_render(struct awin *a, struct Gadget *g);
+int boopsi_hittest(struct awin *a, struct Gadget *g, int rx, int ry);
+int boopsi_input(struct awin *a, struct Gadget *g, int first, int code,
+		 int qual, int rx, int ry);
+void boopsi_drawimage(struct RastPort *rp, struct Image *im, int x, int y,
+		      int state);
+
 /* gadtools.c: its gadgets inside Intuition's input handling */
 int gt_handle_down(struct awin *a, struct Gadget *g, int x, int y);
 int gt_handle_up(struct awin *a, struct Gadget *g, int x, int y, int inside);

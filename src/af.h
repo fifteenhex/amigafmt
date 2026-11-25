@@ -54,6 +54,8 @@ struct amilib {
 	void (*init)(struct Library *base);
 	int minslots;                   /* vectors when there is no .fd */
 	int device;                     /* a device: OpenDevice, not OpenLibrary */
+	int hidden;                     /* internal: in no exec list */
+	const struct libimpl *impl2;    /* more implementations */
 	/* filled in by lib_build() */
 	struct Library *base;
 	int nslots;
@@ -64,7 +66,7 @@ struct amilib {
 extern struct amilib lib_exec, lib_dos, lib_utility, lib_version,
 	lib_intuition, lib_graphics, lib_gadtools, lib_mathieeedoubbas,
 	lib_mathieeedoubtrans, lib_mathieeesingbas, lib_mathieeesingtrans,
-	lib_mathffp, lib_mathtrans, lib_timer, lib_icon, lib_layers, lib_workbench, lib_datatypes;
+	lib_mathffp, lib_mathtrans, lib_timer, lib_icon, lib_layers, lib_boopsi, lib_workbench, lib_datatypes;
 extern struct amilib *all_libs[];
 
 struct Library *lib_build(struct amilib *l);
