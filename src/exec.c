@@ -7,9 +7,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <poll.h>
 #include <sys/sysinfo.h>
 #include <unistd.h>
 #include "af.h"
+#include "gui.h"
 
 struct ExecBase *SysBase;
 static volatile sig_atomic_t brk_bits;
@@ -344,6 +346,38 @@ static void e_SetExcept(struct frame *f)
 	RET(old);
 }
 
+/*
+ * Sleep until something may have changed: a timer.device request falls
+ * due, wbde sends something, or a ^C.  0 when nothing can ever wake us.
+ */
+static int wait_events(uint32_t mask)
+{
+	int64_t us = timer_poll();
+	int fd = gui_fd();
+
+	gui_flush();
+	dos_flush_all();
+	if (us == 0)
+		return 1;
+	if (fd >= 0) {
+		struct pollfd p = { fd, POLLIN, 0 };
+		if (poll(&p, 1, us < 0 ? -1 : (int)((us + 999) / 1000)) > 0)
+			gui_pump(0);
+		timer_poll();
+		return 1;
+	}
+	if (us >= 0) {
+		timer_sleep(us);
+		timer_poll();
+		return 1;
+	}
+	if (mask & 0xf000) {
+		pause();
+		return 1;
+	}
+	return 0;
+}
+
 static void e_Wait(struct frame *f)
 {
 	struct Task *t = &me->pr_Task;
@@ -357,21 +391,11 @@ static void e_Wait(struct frame *f)
 			RET(got);
 			return;
 		}
-		{
-			int64_t us = timer_poll();      /* timer.device */
-			if (t->tc_SigRecvd & mask)
-				continue;
-			if (us >= 0) {
-				timer_sleep(us);
-				continue;
-			}
-		}
-		if (!(mask & 0xf000)) {
+		if (!wait_events(mask)) {
 			dos_flush_all();
 			af_die("%s: Wait($%x) for a signal nothing can send "
 			       "(single task); stopping", af_progname, mask);
 		}
-		pause();
 	}
 }
 
@@ -466,10 +490,19 @@ static void putmsg(struct MsgPort *p, struct Message *m)
 
 static void e_PutMsg(struct frame *f) { putmsg(PTR(A(0)), PTR(A(1))); }
 
+/* a program polling its window's port still gets wbde's events */
+struct Node *exec_getmsg(struct MsgPort *p)
+{
+	if (!N(p->mp_MsgList.lh_Head)->ln_Succ && gui_fd() >= 0) {
+		gui_flush();
+		gui_pump(0);
+	}
+	return remhead(&p->mp_MsgList);
+}
+
 static void e_GetMsg(struct frame *f)
 {
-	struct MsgPort *p = PTR(A(0));
-	RET(remhead(&p->mp_MsgList));
+	RET(exec_getmsg(PTR(A(0))));
 }
 
 void exec_reply(struct Message *m)
@@ -487,9 +520,12 @@ static void e_WaitPort(struct frame *f)
 {
 	struct MsgPort *p = PTR(A(0));
 
-	if (!N(p->mp_MsgList.lh_Head)->ln_Succ)
-		af_die("%s: WaitPort() on an empty port would wait forever "
-		       "(single task); stopping", af_progname);
+	while (!N(p->mp_MsgList.lh_Head)->ln_Succ) {
+		exec_pending_break();
+		if (!wait_events(0))
+			af_die("%s: WaitPort() on an empty port would wait "
+			       "forever (single task); stopping", af_progname);
+	}
 	RET(p->mp_MsgList.lh_Head);
 }
 

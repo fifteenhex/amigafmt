@@ -373,6 +373,241 @@ struct ClockData {
 #define ERROR_BUFFER_OVERFLOW        303
 #define ERROR_BREAK                  304
 
+
+/* ---- graphics ---- */
+
+struct TextAttr {
+	APTR ta_Name;
+	uint16_t ta_YSize;
+	uint8_t ta_Style, ta_Flags;
+};
+
+struct TextFont {
+	struct Message tf_Message;      /* ln_Name is the font name */
+	uint16_t tf_YSize;
+	uint8_t tf_Style, tf_Flags;
+	uint16_t tf_XSize, tf_Baseline, tf_BoldSmear, tf_Accessors;
+	uint8_t tf_LoChar, tf_HiChar;
+	APTR tf_CharData;
+	uint16_t tf_Modulo;
+	APTR tf_CharLoc, tf_CharSpace, tf_CharKern;
+};
+
+struct BitMap {
+	uint16_t BytesPerRow, Rows;
+	uint8_t Flags, Depth;
+	uint16_t pad;
+	APTR Planes[8];
+};
+
+struct RastPort {
+	APTR Layer, BitMap, AreaPtrn, TmpRas, AreaInfo, GelsInfo;
+	uint8_t Mask;
+	int8_t FgPen, BgPen, AOlPen, DrawMode, AreaPtSz, linpatcnt, dummy;
+	uint16_t Flags, LinePtrn;
+	int16_t cp_x, cp_y;
+	uint8_t minterms[8];
+	int16_t PenWidth, PenHeight;
+	APTR Font;
+	uint8_t AlgoStyle, TxFlags;
+	uint16_t TxHeight, TxWidth, TxBaseline;
+	int16_t TxSpacing;
+	APTR RP_User;
+	uint32_t longreserved[2];
+	uint16_t wordreserved[7];
+	uint8_t reserved[8];
+};
+
+#define JAM1        0
+#define JAM2        1
+#define COMPLEMENT  2
+#define INVERSVID   4
+
+struct AreaInfo {
+	APTR VctrTbl, VctrPtr, FlagTbl, FlagPtr;
+	int16_t Count, MaxCount, FirstX, FirstY;
+};
+
+struct ViewPort {
+	APTR Next, ColorMap, DspIns, SprIns, ClrIns, UCopIns;
+	int16_t DWidth, DHeight, DxOffset, DyOffset;
+	uint16_t Modes;
+	uint8_t SpritePriorities, ExtendedModes;
+	APTR RasInfo;
+};
+
+/* ---- intuition ---- */
+
+struct Screen {
+	APTR NextScreen, FirstWindow;
+	int16_t LeftEdge, TopEdge, Width, Height, MouseY, MouseX;
+	uint16_t Flags;
+	APTR Title, DefaultTitle;
+	int8_t BarHeight, BarVBorder, BarHBorder, MenuVBorder, MenuHBorder;
+	int8_t WBorTop, WBorLeft, WBorRight, WBorBottom;
+	APTR Font;                      /* struct TextAttr * */
+	struct ViewPort ViewPort;
+	struct RastPort RastPort;
+	struct BitMap BitMap;
+	uint8_t LayerInfo[102];
+	APTR FirstGadget;
+	uint8_t DetailPen, BlockPen;
+	uint16_t SaveColor0;
+	APTR BarLayer, ExtData, UserData;
+};
+
+struct Window {
+	APTR NextWindow;
+	int16_t LeftEdge, TopEdge, Width, Height, MouseY, MouseX;
+	int16_t MinWidth, MinHeight;
+	uint16_t MaxWidth, MaxHeight;
+	uint32_t Flags;
+	APTR MenuStrip, Title, FirstRequest, DMRequest;
+	int16_t ReqCount;
+	APTR WScreen, RPort;
+	int8_t BorderLeft, BorderTop, BorderRight, BorderBottom;
+	APTR BorderRPort, FirstGadget, Parent, Descendant, Pointer;
+	int8_t PtrHeight, PtrWidth, XOffset, YOffset;
+	uint32_t IDCMPFlags;
+	APTR UserPort, WindowPort, MessageKey;
+	uint8_t DetailPen, BlockPen;
+	APTR CheckMark, ScreenTitle;
+	int16_t GZZMouseX, GZZMouseY, GZZWidth, GZZHeight;
+	APTR ExtData, UserData, WLayer, IFont;
+	uint32_t MoreFlags;
+};
+
+struct NewWindow {
+	int16_t LeftEdge, TopEdge, Width, Height;
+	uint8_t DetailPen, BlockPen;
+	uint32_t IDCMPFlags, Flags;
+	APTR FirstGadget, CheckMark, Title, Screen, BitMap;
+	int16_t MinWidth, MinHeight;
+	uint16_t MaxWidth, MaxHeight, Type;
+	APTR Extension;                 /* ExtNewWindow, with WFLG_NW_EXTENDED */
+};
+
+struct IntuiMessage {
+	struct Message ExecMessage;
+	uint32_t Class;
+	uint16_t Code, Qualifier;
+	APTR IAddress;
+	int16_t MouseX, MouseY;
+	uint32_t Seconds, Micros;
+	APTR IDCMPWindow, SpecialLink;
+};
+
+struct Gadget {
+	APTR NextGadget;
+	int16_t LeftEdge, TopEdge, Width, Height;
+	uint16_t Flags, Activation, GadgetType;
+	APTR GadgetRender, SelectRender, GadgetText;
+	int32_t MutualExclude;
+	APTR SpecialInfo;
+	uint16_t GadgetID;
+	APTR UserData;
+};
+
+struct PropInfo {
+	uint16_t Flags, HorizPot, VertPot, HorizBody, VertBody;
+	uint16_t CWidth, CHeight, HPotRes, VPotRes, LeftBorder, TopBorder;
+};
+
+struct StringInfo {
+	APTR Buffer, UndoBuffer;
+	int16_t BufferPos, MaxChars, DispPos, UndoPos, NumChars, DispCount;
+	int16_t CLeft, CTop;
+	APTR Extension;
+	int32_t LongInt;
+	APTR AltKeyMap;
+};
+
+struct IntuiText {
+	uint8_t FrontPen, BackPen, DrawMode, pad;
+	int16_t LeftEdge, TopEdge;
+	APTR ITextFont, IText, NextText;
+};
+
+struct Border {
+	int16_t LeftEdge, TopEdge;
+	uint8_t FrontPen, BackPen, DrawMode, Count;
+	APTR XY, NextBorder;
+};
+
+struct Image {
+	int16_t LeftEdge, TopEdge, Width, Height, Depth;
+	APTR ImageData;
+	uint8_t PlanePick, PlaneOnOff;
+	APTR NextImage;
+};
+
+struct Menu {
+	APTR NextMenu;
+	int16_t LeftEdge, TopEdge, Width, Height;
+	uint16_t Flags;
+	APTR MenuName, FirstItem;
+	int16_t JazzX, JazzY, BeatX, BeatY;
+};
+
+struct MenuItem {
+	APTR NextItem;
+	int16_t LeftEdge, TopEdge, Width, Height;
+	uint16_t Flags;
+	int32_t MutualExclude;
+	APTR ItemFill, SelectFill;
+	int8_t Command, pad;
+	APTR SubItem;
+	uint16_t NextSelect;
+};
+
+struct DrawInfo {
+	uint16_t dri_Version, dri_NumPens;
+	APTR dri_Pens, dri_Font;
+	uint16_t dri_Depth;
+	uint16_t dri_ResX, dri_ResY;
+	uint32_t dri_Flags;
+	APTR dri_CheckMark, dri_AmigaKey;
+	uint32_t dri_Reserved[5];
+};
+
+struct EasyStruct {
+	uint32_t es_StructSize, es_Flags;
+	APTR es_Title, es_TextFormat, es_GadgetFormat;
+};
+
+/* ---- workbench ---- */
+
+struct WBArg {
+	BPTR wa_Lock;
+	APTR wa_Name;
+};
+
+struct WBStartup {
+	struct Message sm_Message;
+	APTR sm_Process;
+	BPTR sm_Segment;
+	int32_t sm_NumArgs;
+	APTR sm_ToolWindow, sm_ArgList;
+};
+
+struct DiskObject {
+	uint16_t do_Magic, do_Version;
+	struct Gadget do_Gadget;
+	uint8_t do_Type, pad;
+	APTR do_DefaultTool, do_ToolTypes;
+	int32_t do_CurrentX, do_CurrentY;
+	APTR do_DrawerData, do_ToolWindow;
+	int32_t do_StackSize;
+};
+
+#define GSZ(s, n) _Static_assert(sizeof(struct s) == (n), "sizeof " #s)
+GSZ(TextFont, 52); GSZ(BitMap, 40); GSZ(RastPort, 100); GSZ(ViewPort, 40);
+GSZ(Screen, 346); GSZ(Window, 136); GSZ(NewWindow, 52); GSZ(IntuiMessage, 52);
+GSZ(Gadget, 44); GSZ(PropInfo, 22); GSZ(StringInfo, 36); GSZ(IntuiText, 20);
+GSZ(Border, 16); GSZ(Image, 20); GSZ(Menu, 30); GSZ(MenuItem, 34);
+GSZ(WBStartup, 40); GSZ(DiskObject, 78);
+#undef GSZ
+
 #define CHK(s, f, o) _Static_assert(offsetof(struct s, f) == (o), #s "." #f)
 CHK(Library, lib_OpenCnt, 32);
 CHK(ExecBase, ThisTask, 276);
@@ -393,6 +628,17 @@ CHK(CommandLineInterface, cli_Module, 60);
 CHK(AnchorPath, ap_Info, 20);
 CHK(AnchorPath, ap_Buf, 280);
 CHK(DosLibrary, dl_Root, 34);
+CHK(Window, RPort, 50);
+CHK(Window, UserPort, 86);
+CHK(Window, GZZWidth, 112);
+CHK(Window, IFont, 128);
+CHK(Screen, Font, 40);
+CHK(Screen, RastPort, 84);
+CHK(Screen, BitMap, 184);
+CHK(Screen, FirstGadget, 326);
+CHK(RastPort, Font, 52);
+CHK(RastPort, TxBaseline, 62);
+CHK(TextFont, tf_CharData, 34);
 #undef CHK
 
 #endif
