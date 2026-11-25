@@ -228,11 +228,13 @@ static void dispatch_queue(void)
 		memmove(queue, queue + 1, sizeof(queue[0]) * --nqueue);
 		a = by_id(q.win);
 		if (q.resize) {
-			if (a && q.mfd >= 0)
+			if (a && q.mfd >= 0) {
 				map_window(a, &q.m, q.mfd);
-			else if (q.mfd >= 0)
+				intui_resized(a);
+			} else if (q.mfd >= 0)
 				close(q.mfd);
-		}
+		} else if (a)
+			intui_event(a, &q.e);
 	}
 }
 
@@ -389,6 +391,13 @@ int gui_connect(void)
 		return -1;
 	}
 	build_screen();
+	{
+		extern struct Library *IntuitionBase;
+		if (IntuitionBase) {    /* ActiveScreen, FirstScreen */
+			*(uint32_t *)((uint8_t *)IntuitionBase + 56) = APTR_OF(wb_screen);
+			*(uint32_t *)((uint8_t *)IntuitionBase + 60) = APTR_OF(wb_screen);
+		}
+	}
 	if (GfxBase)    /* GfxBase->DefaultFont, offset 154 */
 		*(uint32_t *)((uint8_t *)GfxBase + 154) = APTR_OF(gui_topaz);
 	return 0;

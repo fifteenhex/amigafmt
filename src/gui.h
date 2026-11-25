@@ -49,6 +49,13 @@ int gui_obtain_pen(uint8_t r, uint8_t g, uint8_t b);
 struct awin *gui_by_window(APTR w);
 struct awin *gui_by_rp(APTR rp);
 
+/* intuition.c */
+void intui_event(struct awin *a, const struct wbp_event *e);
+void intui_resized(struct awin *a);
+void intui_render_gadgets(struct awin *a, struct Gadget *g, int n);
+struct awin *intui_open_plain(const char *title, int iw, int ih);
+void asl_event(struct awin *a, const struct wbp_event *e);
+
 /* gfx.c: drawing on a RastPort */
 void gfx_rectfill(struct RastPort *rp, int x0, int y0, int x1, int y1, int pen);
 void gfx_text(struct RastPort *rp, const char *s, int n);

@@ -9,6 +9,7 @@
 #include <strings.h>
 #include <poll.h>
 #include <sys/sysinfo.h>
+#include <time.h>
 #include <unistd.h>
 #include "af.h"
 #include "gui.h"
@@ -348,17 +349,40 @@ static void e_SetExcept(struct frame *f)
 
 /*
  * Sleep until something may have changed: a timer.device request falls
- * due, wbde sends something, or a ^C.  0 when nothing can ever wake us.
+ * due, wbde sends something (events become IntuiMessages, so port
+ * signals), INTUITICKS are due, or a ^C.  0 when nothing can ever wake us.
  */
+extern int intui_wants_ticks(void);
+extern void intui_ticks(void);
+
+static int64_t mono_us(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+}
+
 static int wait_events(uint32_t mask)
 {
-	int64_t us = timer_poll();
-	int fd = gui_fd();
+	static int64_t last_tick;
+	int64_t us = timer_poll(), now;
+	int ticks = intui_wants_ticks(), fd = gui_fd();
 
 	gui_flush();
 	dos_flush_all();
 	if (us == 0)
 		return 1;
+	if (ticks) {
+		now = mono_us();
+		if (now - last_tick >= 100000) {
+			last_tick = now;
+			intui_ticks();
+			return 1;
+		}
+		if (us < 0 || us > 100000 - (now - last_tick))
+			us = 100000 - (now - last_tick);
+	}
 	if (fd >= 0) {
 		struct pollfd p = { fd, POLLIN, 0 };
 		if (poll(&p, 1, us < 0 ? -1 : (int)((us + 999) / 1000)) > 0)
@@ -479,7 +503,13 @@ static void e_Supervisor(struct frame *f)
 
 /* ---- ports and messages ---- */
 
+void exec_putmsg(struct MsgPort *p, struct Message *m);
 static void putmsg(struct MsgPort *p, struct Message *m)
+{
+	exec_putmsg(p, m);
+}
+
+void exec_putmsg(struct MsgPort *p, struct Message *m)
 {
 	m->mn_Node.ln_Type = NT_MESSAGE;
 	addtail(&p->mp_MsgList, &m->mn_Node);
@@ -505,8 +535,12 @@ static void e_GetMsg(struct frame *f)
 	RET(exec_getmsg(PTR(A(0))));
 }
 
+extern int intui_reply(struct Message *m);
+
 void exec_reply(struct Message *m)
 {
+	if (intui_reply(m))
+		return;
 	if (m->mn_ReplyPort) {
 		putmsg(PTR(m->mn_ReplyPort), m);
 		m->mn_Node.ln_Type = 7;         /* NT_REPLYMSG */

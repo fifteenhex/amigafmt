@@ -171,7 +171,13 @@ static void u_CheckDate(struct frame *f)
 #define TAG_MORE   2
 #define TAG_SKIP   3
 
+struct TagItem *util_next_tag(struct TagItem **tp);
 static struct TagItem *next_tag(struct TagItem **tp)
+{
+	return util_next_tag(tp);
+}
+
+struct TagItem *util_next_tag(struct TagItem **tp)
 {
 	struct TagItem *t = *tp;
 
