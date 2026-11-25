@@ -27,12 +27,15 @@ if need_float_store
   add_project_arguments('-ffloat-store', language: 'c')
 endif
 
+libm = cc.find_library('m', required: false)
+
 srcs = files(
   'src/main.c', 'src/lib.c', 'src/hunk.c', 'src/amem.c', 'src/path.c',
   'src/exec.c', 'src/fmt.c', 'src/dos.c', 'src/lock.c', 'src/readargs.c',
   'src/pattern.c', 'src/date.c', 'src/utility.c', 'src/intuition.c',
-  'src/fdtab.c', 'src/glue.S')
+  'src/math.c', 'src/fdtab.c', 'src/glue.S')
 amigafmt = executable('amigafmt', srcs,
+  dependencies: [libm],
   install: true)
 
 install_data('tools/register.sh', install_dir: get_option('bindir'),
@@ -41,7 +44,9 @@ install_data('amigafmt.conf.example', install_dir: get_option('datadir') / 'amig
 install_data('README.md', install_dir: get_option('datadir') / 'doc' / 'amigafmt')
 
 # the vector tables, regenerated from the .fd files into the source tree
-fds = ['exec', 'dos', 'utility', 'intuition', 'graphics']
+fds = ['exec', 'dos', 'utility', 'intuition', 'graphics', 'locale',
+       'mathieeedoubbas', 'mathieeedoubtrans', 'mathieeesingbas',
+       'mathieeesingtrans', 'mathffp', 'mathtrans']
 run_target('fdtab',
   command: [files('tools/fdtab.sh'), files('tools/fd2c.py'),
             meson.current_source_dir() / 'src' / 'fdtab.c', get_option('fd_dir')] + fds)
