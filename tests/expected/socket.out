@@ -22,4 +22,18 @@ WaitSelect(signalled) = 0, ready 0, signal back 1
 WaitSelect(no signal, 100 ms) = 0, mask 0
 after shutdown: WaitSelect 1 ready 1, recv 0
 close 0, again -1 errno 9
+gethostbyname(localhost): 1, type 2 len 4, 127.0.0.1 1
+gethostbyaddr(127.0.0.1): a name 1
+gethostbyname(10.2.3.4): $A020304
+getservbyname(telnet): port 23 tcp
+getservbyport(21): ftp
+getprotobyname(udp): 17
+getprotobynumber(6): tcp
+Inet_NtoA: 192.168.3.1
+inet_addr: $C0A80301 $A000001 $FFFFFFFF
+inet_network(10.1) $A01
+NetOf $A LnaOf $203 MakeAddr $C0A80307
+gethostname: 0
+SocketBaseTagList = 0: dtable 64, now 128, ECONNREFUSED "Connection refused"
+tsock: a syslog line: 42, Bad file descriptor
 rc=0

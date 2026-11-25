@@ -23,6 +23,21 @@
 #define LVOReleaseCopyOfSocket (-156)
 #define LVOErrno (-162)
 #define LVODup2Socket (-264)
+#define LVOInet_NtoA (-174)
+#define LVOinet_addr (-180)
+#define LVOInet_LnaOf (-186)
+#define LVOInet_NetOf (-192)
+#define LVOInet_MakeAddr (-198)
+#define LVOinet_network (-204)
+#define LVOgethostbyname (-210)
+#define LVOgethostbyaddr (-216)
+#define LVOgetservbyname (-234)
+#define LVOgetservbyport (-240)
+#define LVOgetprotobyname (-246)
+#define LVOgetprotobynumber (-252)
+#define LVOvsyslog (-258)
+#define LVOgethostname (-282)
+#define LVOSocketBaseTagList (-294)
 #define LVOSetErrnoPtr (-168)
 
 #define FIONBIO 0x8004667e
@@ -190,6 +205,55 @@ int main(u32 arglen, char *args)
 	n += call(sb, LVOCloseSocket, "d0", ls);
 	v = call(sb, LVOCloseSocket, "d0", ls);
 	printf("close %ld, again %ld errno %ld\n", n, v, err);
+
+	/* the databases and the address calls */
+	{
+		u32 *he = (u32 *)call(sb, LVOgethostbyname, "a0", "localhost");
+		u32 lo = 0x7f000001, *se, *pe;
+		printf("gethostbyname(localhost): %ld, type %ld len %ld, 127.0.0.1 %ld\n",
+		       he != 0, he ? he[2] : 0, he ? he[3] : 0,
+		       he && **(u32 **)he[4] == 0x7f000001);
+		he = (u32 *)call(sb, LVOgethostbyaddr, "a0d0d1", &lo, 4, 2);
+		printf("gethostbyaddr(127.0.0.1): a name %ld\n",
+		       he && *(char *)he[0]);
+		he = (u32 *)call(sb, LVOgethostbyname, "a0", "10.2.3.4");
+		printf("gethostbyname(10.2.3.4): $%lx\n", he ? **(u32 **)he[4] : 0);
+		se = (u32 *)call(sb, LVOgetservbyname, "a0a1", "telnet", "tcp");
+		printf("getservbyname(telnet): port %ld %s\n", se ? se[2] : 0,
+		       se ? (char *)se[3] : "-");
+		se = (u32 *)call(sb, LVOgetservbyport, "d0a0", 21, "tcp");
+		printf("getservbyport(21): %s\n", se ? (char *)se[0] : "-");
+		pe = (u32 *)call(sb, LVOgetprotobyname, "a0", "udp");
+		printf("getprotobyname(udp): %ld\n", pe ? pe[2] : 0);
+		pe = (u32 *)call(sb, LVOgetprotobynumber, "d0", 6);
+		printf("getprotobynumber(6): %s\n", pe ? (char *)pe[0] : "-");
+		printf("Inet_NtoA: %s\n", (char *)call(sb, LVOInet_NtoA, "d0", 0xc0a80301));
+		printf("inet_addr: $%lx $%lx $%lx\n",
+		       call(sb, LVOinet_addr, "a0", "192.168.3.1"),
+		       call(sb, LVOinet_addr, "a0", "10.1"),
+		       call(sb, LVOinet_addr, "a0", "bogus"));
+		printf("inet_network(10.1) $%lx\n", call(sb, LVOinet_network, "a0", "10.1"));
+		printf("NetOf $%lx LnaOf $%lx MakeAddr $%lx\n",
+		       call(sb, LVOInet_NetOf, "d0", 0x0a010203),
+		       call(sb, LVOInet_LnaOf, "d0", 0xac100203),
+		       call(sb, LVOInet_MakeAddr, "d0d1", 0xc0a803, 7));
+		printf("gethostname: %ld\n", call(sb, LVOgethostname, "a0d0", buf, 32));
+	}
+	{
+		/* SocketBaseTagList: dtable size, errno string, log tag */
+		u32 tags[] = { 0x80000000 | 8 << 1, 0,          /* get dtable size */
+			       0x80000000 | 8 << 1 | 1, 128,    /* set it */
+			       0x80000000 | 14 << 1, 61,        /* errno 61's text */
+			       0x80000000 | 11 << 1 | 1, (u32)"tsock",
+			       0 };
+		u32 a[2];
+		s32 r = call(sb, LVOSocketBaseTagList, "a0", tags);
+		printf("SocketBaseTagList = %ld: dtable %ld, now %ld, ECONNREFUSED \"%s\"\n",
+		       r, tags[1], call(sb, -138, ""), (char *)tags[5]);
+		a[0] = 42;
+		call(sb, LVOsend, "d0a0d1d2", 99, "x", 1, 0);
+		call(sb, LVOvsyslog, "d0a0a1", 3, "a syslog line: %ld, %m", a);
+	}
 	call(SysBase, LVOCloseLibrary, "a1", sb);
 	return 0;
 }

@@ -8,6 +8,7 @@
  * the static buffer of a BSD libc is.
  */
 #include <arpa/inet.h>
+#include <errno.h>
 #include <netinet/in.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -208,7 +209,165 @@ static void b_getnetbyaddr(struct frame *f)
 	    make_ent(b, &e, 'n') : 0);
 }
 
+static void b_gethostname(struct frame *f)
+{
+	struct sb *b = sb_of(f);
+	char name[256];
+	uint32_t n = D(0);
+
+	if (gethostname(name, sizeof(name))) {
+		RET(sb_errno(b, errno));
+		return;
+	}
+	name[sizeof(name) - 1] = 0;
+	if (n) {
+		strncpy(PTR(A(0)), name, n);
+		((char *)PTR(A(0)))[n - 1] = 0;
+	}
+	RET(0);
+}
+
+/* the address this machine would send from, found by routing a UDP
+   socket somewhere (connect() on UDP sends nothing); else loopback */
+static void b_gethostid(struct frame *f)
+{
+	struct sockaddr_in to = { .sin_family = AF_INET, .sin_port = htons(9) };
+	struct sockaddr_in me;
+	socklen_t len = sizeof(me);
+	uint32_t id = htonl(INADDR_LOOPBACK);
+	int fd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+
+	to.sin_addr.s_addr = htonl(0xc0000201);         /* 192.0.2.1 */
+	if (fd >= 0) {
+		if (!connect(fd, (struct sockaddr *)&to, sizeof(to)) &&
+		    !getsockname(fd, (struct sockaddr *)&me, &len) &&
+		    me.sin_addr.s_addr)
+			id = me.sin_addr.s_addr;
+		close(fd);
+	}
+	RET(id);
+}
+
+/* ---- addresses ---- */
+
+static void b_Inet_NtoA(struct frame *f)
+{
+	struct sb *b = sb_of(f);
+	uint32_t a = D(0);
+
+	snprintf(b->ntoa, 20, "%u.%u.%u.%u", a >> 24, (a >> 16) & 255,
+		 (a >> 8) & 255, a & 255);
+	RET(b->ntoa);
+}
+
+static void b_inet_addr(struct frame *f)
+{
+	struct in_addr ia;
+
+	RET(A(0) && inet_aton(PTR(A(0)), &ia) ? ia.s_addr : INADDR_NONE);
+}
+
+static void b_inet_network(struct frame *f)
+{
+	int ok;
+	uint32_t v = A(0) ? nd_inet_network(PTR(A(0)), &ok) : 0;
+
+	RET(A(0) && ok ? v : INADDR_NONE);
+}
+
+/* the classful split, as 4.4BSD's inet_lnaof/inet_netof/inet_makeaddr */
+static void b_Inet_LnaOf(struct frame *f)
+{
+	uint32_t i = D(0);
+
+	RET(!(i & 0x80000000) ? i & 0x00ffffff :
+	    (i & 0xc0000000) == 0x80000000 ? i & 0x0000ffff : i & 0x000000ff);
+}
+
+static void b_Inet_NetOf(struct frame *f)
+{
+	uint32_t i = D(0);
+
+	RET(!(i & 0x80000000) ? i >> 24 :
+	    (i & 0xc0000000) == 0x80000000 ? i >> 16 : i >> 8);
+}
+
+static void b_Inet_MakeAddr(struct frame *f)
+{
+	uint32_t net = D(0), host = D(1);
+
+	RET(net < 128 ? net << 24 | (host & 0x00ffffff) :
+	    net < 65536 ? net << 16 | (host & 0x0000ffff) :
+	    net < 16777216 ? net << 8 | (host & 0x000000ff) : net | host);
+}
+
+/* ---- syslog ---- */
+
+struct logbuf {
+	char s[1024];
+	int n;
+};
+
+static void logput(int c, void *ctx)
+{
+	struct logbuf *l = ctx;
+
+	if (c && l->n < (int)sizeof(l->s) - 1)
+		l->s[l->n++] = c;
+}
+
+/*
+ * vsyslog(level, format, args) goes to standard error as "tag: message".
+ * The format is RawDoFmt's, as the Amiga's syslog takes it, with %m for
+ * the text of errno.
+ */
+static void b_vsyslog(struct frame *f)
+{
+	struct sb *b = sb_of(f);
+	const char *fmt = PTR(A(0)), *tag;
+	char fixed[1024];
+	struct logbuf l = { .n = 0 };
+	int pri = D(0) & 7, o = 0;
+
+	if (!fmt || !(b->logmask & (1 << pri)))
+		return;
+	for (; *fmt && o < (int)sizeof(fixed) - 1; fmt++) {
+		if (fmt[0] == '%' && fmt[1] == 'm') {
+			for (const char *e = bsd_strerror(b->err);
+			     *e && o < (int)sizeof(fixed) - 2; e++) {
+				if (*e == '%')
+					fixed[o++] = '%';
+				fixed[o++] = *e;
+			}
+			fmt++;
+		} else if (fmt[0] == '%' && fmt[1] == '%') {
+			fixed[o++] = *fmt++;
+			fixed[o++] = *fmt;
+		} else
+			fixed[o++] = *fmt;
+	}
+	fixed[o] = 0;
+	fmt_do(fixed, A(1), logput, &l, 0);
+	while (l.n && l.s[l.n - 1] == '\n')
+		l.n--;
+	l.s[l.n] = 0;
+	tag = b->logtag ? PTR(b->logtag) :
+	      b->owner && b->owner->tc_Node.ln_Name ?
+	      (const char *)PTR(b->owner->tc_Node.ln_Name) : af_progname;
+	dos_flush_all();
+	if (b->logstat & 1)                     /* LOG_PID */
+		fprintf(stderr, "%s[%d]: %s\n", tag, (int)getpid(), l.s);
+	else
+		fprintf(stderr, "%s: %s\n", tag, l.s);
+	fflush(stderr);
+}
+
 const struct libimpl bsd_impl_db[] = {
+	{ "gethostname", b_gethostname }, { "gethostid", b_gethostid },
+	{ "Inet_NtoA", b_Inet_NtoA }, { "inet_addr", b_inet_addr },
+	{ "inet_network", b_inet_network }, { "Inet_LnaOf", b_Inet_LnaOf },
+	{ "Inet_NetOf", b_Inet_NetOf }, { "Inet_MakeAddr", b_Inet_MakeAddr },
+	{ "vsyslog", b_vsyslog },
 	{ "gethostbyname", b_gethostbyname },
 	{ "gethostbyaddr", b_gethostbyaddr },
 	{ "getservbyname", b_getservbyname },
