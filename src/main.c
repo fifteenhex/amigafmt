@@ -434,6 +434,8 @@ int main(int argc, char **argv)
 	if (stack < 8192)
 		stack = 8192;
 	stack = (stack + 3) & ~3u;
+	if (getenv("WBDE_STACK") && strtoul(getenv("WBDE_STACK"), NULL, 0) > stack)
+		stack = (strtoul(getenv("WBDE_STACK"), NULL, 0) + 3) & ~3u;
 
 	/* a Linux path is what the shell gave us; fall back to Amiga names */
 	lp = access(prog, R_OK) ? path_to_linux(prog, NULL) : strdup(prog);

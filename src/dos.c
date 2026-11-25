@@ -24,6 +24,8 @@
 #include "af.h"
 #include "dos_int.h"
 
+void exec_putmsg(struct MsgPort *p, struct Message *m);
+
 struct DosLibrary *DOSBase;
 struct Process *me;
 char *dos_args;
@@ -952,9 +954,12 @@ static int bstr_set(BPTR b, const char *s, int max)
 	return 1;
 }
 
+/* the CLI structure; a Workbench start has pr_CLI 0 but we keep one */
+static struct CommandLineInterface *hidden_cli;
+
 static struct CommandLineInterface *cli(void)
 {
-	return BADDR(me->pr_CLI);
+	return me->pr_CLI ? BADDR(me->pr_CLI) : hidden_cli;
 }
 
 static void d_GetProgramName(struct frame *f)
@@ -1046,7 +1051,7 @@ static int32_t run_line(struct frame *f, const char *line, BPTR in, BPTR out)
 	int append = 0, err, n = 0;
 	BPTR seg = 0, oin = me->pr_CIS, oout = me->pr_COS, fin = 0, fout = 0;
 	BPTR odir = me->pr_CurrentDir;
-	struct CommandLineInterface *c = BADDR(me->pr_CLI);
+	struct CommandLineInterface *c = cli();
 	char oldname[256];
 	int32_t rc;
 
@@ -1822,6 +1827,54 @@ static char *make_args(int argc, char **argv)
 	return s;
 }
 
+/*
+ * Started from a Workbench icon (wbde puts the .info's path in WBDE_ICON):
+ * no CLI, no standard streams, and a WBStartup message waiting on the
+ * process port with the tool and any projects as WBArgs.  argv holds the
+ * projects (wbde runs the default tool with the project as an argument).
+ */
+static void wb_start(struct Process *p, int argc, char **argv,
+		     const char *prog, BPTR seg)
+{
+	struct WBStartup *wb = amem_alloc(sizeof(*wb));
+	struct WBArg *args = amem_alloc((argc + 1) * sizeof(*args));
+	struct MsgPort *rp = amem_alloc(sizeof(*rp));
+	char full[4096], *s;
+	int i;
+
+	unsetenv("WBDE_ICON");          /* not for programs this one starts */
+	rp->mp_Node.ln_Type = NT_MSGPORT;
+	rp->mp_Flags = 2;                       /* PA_IGNORE */
+	exec_newlist(&rp->mp_MsgList);
+	for (i = 0; i <= argc; i++) {
+		const char *path = i ? argv[i - 1] : prog;
+		char *name;
+		if (!realpath(path, full))
+			snprintf(full, sizeof(full), "%s", path);
+		s = strrchr(full, '/');
+		name = amem_alloc(strlen(s ? s + 1 : full) + 1);
+		strcpy(name, s ? s + 1 : full);
+		if (s == full)
+			s[1] = 0;
+		else if (s)
+			*s = 0;
+		args[i].wa_Lock = lock_new(s ? full : ".", SHARED_LOCK);
+		args[i].wa_Name = APTR_OF(name);
+	}
+	wb->sm_Message.mn_ReplyPort = APTR_OF(rp);
+	wb->sm_Message.mn_Length = sizeof(*wb);
+	wb->sm_Process = APTR_OF(&p->pr_MsgPort);
+	wb->sm_Segment = seg;
+	wb->sm_NumArgs = argc + 1;
+	wb->sm_ArgList = APTR_OF(args);
+	p->pr_CLI = 0;
+	p->pr_CIS = p->pr_COS = 0;
+	dos_args = amem_alloc(2);
+	dos_arglen = 0;
+	p->pr_Arguments = APTR_OF(dos_args);
+	exec_putmsg(&p->pr_MsgPort, &wb->sm_Message);
+}
+
 void dos_init(int argc, char **argv, const char *prog, BPTR seg,
 	      uint32_t stack)
 {
@@ -1873,6 +1926,11 @@ void dos_init(int argc, char **argv, const char *prog, BPTR seg,
 
 	lock_init_process(p, prog);
 
+	hidden_cli = c;
+	if (getenv("WBDE_ICON") && *getenv("WBDE_ICON")) {
+		wb_start(p, argc, argv, prog, seg);
+		return;
+	}
 	if (raw) {
 		dos_args = amem_alloc(strlen(raw) + 2);
 		sprintf(dos_args, "%s\n", raw);

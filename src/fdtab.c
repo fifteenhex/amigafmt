@@ -681,6 +681,28 @@ const struct fdent fd_locale[] = {
 	{ 216, "localePrivate8", "" },
 	{ 0, 0, 0 }
 };
+const struct fdent fd_icon[] = {
+	{ 30, "iconPrivate1", "" },
+	{ 36, "iconPrivate2", "" },
+	{ 42, "iconPrivate3", "" },
+	{ 48, "iconPrivate4", "" },
+	{ 54, "FreeFreeList", "a0" },
+	{ 60, "iconPrivate5", "" },
+	{ 66, "iconPrivate6", "" },
+	{ 72, "AddFreeList", "a0/a1/a2" },
+	{ 78, "GetDiskObject", "a0" },
+	{ 84, "PutDiskObject", "a0/a1" },
+	{ 90, "FreeDiskObject", "a0" },
+	{ 96, "FindToolType", "a0/a1" },
+	{ 102, "MatchToolValue", "a0/a1" },
+	{ 108, "BumpRevision", "a0/a1" },
+	{ 114, "iconPrivate7", "" },
+	{ 120, "GetDefDiskObject", "d0" },
+	{ 126, "PutDefDiskObject", "a0" },
+	{ 132, "GetDiskObjectNew", "a0" },
+	{ 138, "DeleteDiskObject", "a0" },
+	{ 0, 0, 0 }
+};
 const struct fdent fd_mathieeedoubbas[] = {
 	{ 30, "IEEEDPFix", "d0/d1" },
 	{ 36, "IEEEDPFlt", "d0" },

@@ -33,8 +33,8 @@ srcs = files(
   'src/main.c', 'src/lib.c', 'src/hunk.c', 'src/amem.c', 'src/path.c',
   'src/exec.c', 'src/fmt.c', 'src/dos.c', 'src/lock.c', 'src/readargs.c',
   'src/pattern.c', 'src/date.c', 'src/utility.c', 'src/intuition.c',
-  'src/gfx.c', 'src/gui.c', 'src/gadtools.c', 'src/math.c', 'src/timer.c',
-  'src/fdtab.c', 'src/glue.S')
+  'src/gfx.c', 'src/gui.c', 'src/gadtools.c', 'src/icon.c', 'src/math.c',
+  'src/timer.c', 'src/fdtab.c', 'src/glue.S')
 amigafmt = executable('amigafmt', srcs,
   dependencies: [libm],
   install: true)
@@ -45,7 +45,7 @@ install_data('amigafmt.conf.example', install_dir: get_option('datadir') / 'amig
 install_data('README.md', install_dir: get_option('datadir') / 'doc' / 'amigafmt')
 
 # the vector tables, regenerated from the .fd files into the source tree
-fds = ['exec', 'dos', 'utility', 'intuition', 'graphics', 'locale',
+fds = ['exec', 'dos', 'utility', 'intuition', 'graphics', 'locale', 'icon',
        'mathieeedoubbas', 'mathieeedoubtrans', 'mathieeesingbas',
        'mathieeesingtrans', 'mathffp', 'mathtrans']
 run_target('fdtab',
