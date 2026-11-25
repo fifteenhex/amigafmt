@@ -113,7 +113,7 @@ uint32_t boopsi_do(struct IClass *cl, uint32_t obj, void *msg)
 
 	if (!cl || !cl->cl_Dispatcher.h_Entry)
 		return 0;
-	memset(&r, 0, sizeof(r));
+	regs_caller(&r, f);
 	r.a[0] = APTR_OF(cl);
 	r.a[1] = APTR_OF(msg);
 	r.a[2] = obj;

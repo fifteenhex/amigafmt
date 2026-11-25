@@ -287,7 +287,7 @@ static void u_CallHookPkt(struct frame *f)
 	struct Hook *h = PTR(A(0));
 	struct regs r;
 
-	memset(&r, 0, sizeof(r));
+	regs_caller(&r, f);
 	r.a[0] = A(0);
 	r.a[1] = A(1);
 	r.a[2] = A(2);

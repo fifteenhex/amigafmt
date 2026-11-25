@@ -405,7 +405,7 @@ static int exall_put(uint8_t **pos, uint8_t *end, uint8_t **prev,
 		struct Hook *h = PTR(eac->eac_MatchFunc);
 		struct regs r;
 		int32_t t = type;
-		memset(&r, 0, sizeof(r));
+		regs_caller(&r, f);
 		r.a[0] = APTR_OF(h);
 		r.a[1] = APTR_OF(ed);
 		r.a[2] = APTR_OF(&t);

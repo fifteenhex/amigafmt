@@ -137,7 +137,7 @@ static void hook_put(int c, void *ctx)
 	struct hookout *h = ctx;
 	struct regs r;
 
-	memset(&r, 0, sizeof(r));
+	regs_caller(&r, h->f);
 	r.a[0] = h->hook;
 	r.a[1] = (uint8_t)c;
 	r.a[2] = h->locale;

@@ -148,6 +148,7 @@ int64_t date_to_unix(const struct DateStamp *ds);
 
 /* call a handler-visible Amiga function pointer with registers */
 uint32_t amiga_call(struct frame *f, uint32_t pc, struct regs *r);
+void regs_caller(struct regs *r, const struct frame *f);
 uint32_t amiga_call_super(struct frame *f, uint32_t pc, struct regs *r);
 
 #define D(n) (f->d[n])

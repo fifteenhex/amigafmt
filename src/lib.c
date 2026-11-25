@@ -283,6 +283,21 @@ uint32_t amiga_call_super(struct frame *f, uint32_t pc, struct regs *r)
 	return call_amiga_super(r, pc);
 }
 
+/*
+ * The registers a callback (a hook, a dispatcher) starts with: the
+ * caller's, as the library call left them, so that a4 (SAS/C's data
+ * base) and the like are what the program's code expects; the caller
+ * of this sets the argument registers.
+ */
+void regs_caller(struct regs *r, const struct frame *f)
+{
+	memset(r, 0, sizeof(*r));
+	if (!f)
+		return;
+	memcpy(r->d, f->d, sizeof(r->d));
+	memcpy(r->a, f->a, 7 * 4);
+}
+
 /* call Amiga code from inside a handler, on the Amiga stack below f */
 uint32_t amiga_call(struct frame *f, uint32_t pc, struct regs *r)
 {

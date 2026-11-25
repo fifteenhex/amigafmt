@@ -479,7 +479,7 @@ void asl_event(struct awin *a, const struct wbp_event *e)
 		return;
 	}
 	if (e->class == IDCMP_VANILLAKEY) {
-		if (e->code == '\r')
+		if (e->code == '\r' || e->code == '\n')
 			q->result = 1;
 		else if (e->code == 27)
 			q->result = 0;
