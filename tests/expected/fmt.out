@@ -1,0 +1,7 @@
+[w=-2 l=123456 s=str c=X]
+[DEADBEEF|42    |abc|%|-7]
+[3735928559 2A]
+[UPPER ABCDEF]
+printf 1 two     3|4    |
+neg -12 -0012
+rc=0

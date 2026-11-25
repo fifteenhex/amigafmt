@@ -19,7 +19,7 @@
 
 extern void lvo_common(void);
 
-struct amilib *all_libs[] = { &lib_exec,
+struct amilib *all_libs[] = { &lib_exec, &lib_dos,
 			      NULL };
 struct frame *resume_frame;
 
@@ -214,6 +214,7 @@ static void unimplemented(struct amilib *l, int slot, struct frame *f)
 {
 	const char *regs, *name = lib_fn_name(l, slot, &regs);
 
+	dos_flush_all();
 	fprintf(stderr, "amigafmt: %s: unimplemented %s -%d (%s) called from "
 		"$%08x; stopping\n", af_progname, l->name, slot * 6, name,
 		f->ret - 6);
@@ -261,6 +262,7 @@ void af_die(const char *fmt, ...)
 {
 	va_list ap;
 
+	dos_flush_all();
 	fprintf(stderr, "amigafmt: ");
 	va_start(ap, fmt);
 	vfprintf(stderr, fmt, ap);

@@ -1,0 +1,11 @@
+#?.info      wild=1: "Disk.info" "c.info"
+~(#?.info)   wild=1: "abc" "ABC" "foobar" "barn" "aaa" "" "xy" "#?"
+a?c          wild=1: "abc" "ABC"
+(foo|bar)#?  wild=1: "foobar" "barn"
+[a-c]#?      wild=1: "abc" "ABC" "barn" "aaa" "c.info"
+#a           wild=1: "aaa" ""
+x%y          wild=0: "xy"
+'#?          wild=1: "#?"
+#?           wild=1: "Disk.info" "abc" "ABC" "foobar" "barn" "aaa" "" "xy" "#?" "c.info"
+abc          wild=0: "abc" "ABC"
+rc=0

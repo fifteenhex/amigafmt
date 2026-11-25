@@ -1,0 +1,6 @@
+arglen 12 args [one TOG two]
+FROM[0] = "one"
+TO = "two"
+QUIET = 0
+TOG = 0
+rc=0

@@ -167,6 +167,7 @@ static void on_fault(int sig, siginfo_t *si, void *ucv)
 
 	if (sig == SIGSEGV && SysBase && emulate_load(g))
 		return;
+	dos_flush_all();
 	fprintf(stderr, "amigafmt: %s: %s at $%08x, address $%08lx", af_progname,
 		strsignal(sig), pc, (unsigned long)(uintptr_t)si->si_addr);
 	if (hunk_where(pc, the_seg, &h, &off))
@@ -197,89 +198,97 @@ static void map_page0(int allow)
 	page0 = 1;
 }
 
-/* the argument line as the shell hands it over: words separated by
-   spaces, a newline at the end */
-static char *make_args(int argc, char **argv, uint32_t *len)
-{
-	size_t n = 1;
-	char *s, *p;
-	int i;
-
-	for (i = 0; i < argc; i++)
-		n += strlen(argv[i]) + 1;
-	s = p = amem_alloc(n + 1);
-	for (i = 0; i < argc; i++) {
-		if (i)
-			*p++ = ' ';
-		strcpy(p, argv[i]);
-		p += strlen(p);
-	}
-	*p++ = '\n';
-	*p = 0;
-	*len = p - s;
-	return s;
-}
-
 static void usage(void)
 {
 	fprintf(stderr,
 		"usage: amigafmt [options] program [arguments...]\n"
+		"  -a NAME=PATH  assign NAME: to a Linux directory or Amiga path\n"
 		"  -s BYTES      stack size (default 262144)\n"
 		"  -t            trace every library call to stderr\n"
-		"  -n            do not map page 0 (emulate reads of address 4)\n");
+		"  -u            a leading / is the Linux root, not the parent\n"
+		"  -n            do not map page 0 (emulate reads of address 4)\n"
+		"  -l            list the assigns and exit\n");
 	exit(20);
 }
 
 int main(int argc, char **argv)
 {
-	uint32_t stack = 262144, *sp, arglen;
-	int c, nopage0 = getenv("AMIGAFMT_NOPAGE0") != NULL, err;
+	uint32_t stack = 262144, *sp;
+	int c, nopage0 = getenv("AMIGAFMT_NOPAGE0") != NULL, list = 0, err;
 	struct sigaction sa;
 	struct regs r;
+	char *ap[64];
+	int nap = 0;
 	const char *prog, *b;
-	char *args;
+	char *lp;
 	uint8_t *st;
 	uint32_t rc;
 	stack_t ss;
 
 	af_trace = getenv("AMIGAFMT_TRACE") != NULL;
-	while ((c = getopt(argc, argv, "+s:tnh")) != -1) {
+	while ((c = getopt(argc, argv, "+a:s:tunlh")) != -1) {
 		switch (c) {
+		case 'a':
+			if (nap < 64)
+				ap[nap++] = optarg;
+			break;
 		case 's':
 			stack = strtoul(optarg, NULL, 0);
 			break;
 		case 't':
 			af_trace = 1;
 			break;
+		case 'u':
+			setenv("AMIGAFMT_UNIXPATHS", "1", 1);
+			break;
 		case 'n':
 			nopage0 = 1;
+			break;
+		case 'l':
+			list = 1;
 			break;
 		default:
 			usage();
 		}
 	}
-	if (optind >= argc)
+	if (optind >= argc && !list)
 		usage();
-	prog = argv[optind];
+	prog = list ? NULL : argv[optind];
+	path_init(prog);
+	for (c = 0; c < nap; c++) {
+		char *eq = strchr(ap[c], '=');
+		if (!eq)
+			usage();
+		*eq = 0;
+		path_assign(ap[c], eq + 1);
+	}
+	if (list) {
+		path_dump(stdout);
+		return 0;
+	}
 	b = strrchr(prog, '/');
 	af_progname = b ? b + 1 : prog;
 	if (stack < 8192)
 		stack = 8192;
 	stack = (stack + 3) & ~3u;
 
-	if (!(the_seg = hunk_load(prog, &err))) {
+	/* a Linux path is what the shell gave us; fall back to Amiga names */
+	lp = access(prog, R_OK) ? path_to_linux(prog, NULL) : strdup(prog);
+	if (!lp || !(the_seg = hunk_load(lp, &err))) {
 		fprintf(stderr, "amigafmt: %s: cannot load (%s)\n", prog,
-			!access(prog, R_OK) ? "not an AmigaOS executable" :
+			lp && !access(lp, R_OK) ? "not an AmigaOS executable" :
 			strerror(errno));
 		return 20;
 	}
+	free(lp);
 
-	exec_init(af_progname);
+	exec_init();
 	map_page0(!nopage0);
 	if (af_trace)
 		fprintf(stderr, "amigafmt: ExecBase at $%08x, address 4 %s\n",
 			APTR_OF(SysBase), page0 ? "mapped (page 0)" :
 			"emulated (SIGSEGV)");
+	dos_init(argc - optind - 1, argv + optind + 1, prog, the_seg, stack);
 
 	memset(&ss, 0, sizeof(ss));
 	ss.ss_size = 65536;
@@ -293,22 +302,21 @@ int main(int argc, char **argv)
 	sigaction(SIGILL, &sa, NULL);
 	sigaction(SIGFPE, &sa, NULL);
 
-	/* entry: d0 = argument length, a0 = the argument line, a6 = ExecBase,
-	   (sp) = the return address, 4(sp) = the stack size */
 	st = amem_alloc(stack + 64);
 	stack_lo = APTR_OF(st);
 	stack_hi = stack_lo + stack;
 	me->pr_Task.tc_SPLower = stack_lo;
 	me->pr_Task.tc_SPUpper = stack_hi;
+	me->pr_StackBase = MKBADDR(stack_hi);
 	sp = (uint32_t *)(st + stack);
 	*--sp = stack;                          /* 4(sp) = stack size */
-	args = make_args(argc - optind - 1, argv + optind + 1, &arglen);
 	memset(&r, 0, sizeof(r));
 	r.a[7] = APTR_OF(sp);
-	r.d[0] = arglen;
-	r.a[0] = APTR_OF(args);
+	r.d[0] = dos_arglen;
+	r.a[0] = APTR_OF(dos_args);
 	r.a[6] = APTR_OF(SysBase);
 	rc = call_amiga(&r, APTR_OF((uint32_t *)BADDR(the_seg) + 1));
+	dos_flush_all();
 	if (af_trace)
 		fprintf(stderr, "amigafmt: %s returned %d\n", af_progname,
 			(int)rc);

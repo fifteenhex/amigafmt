@@ -32,7 +32,7 @@ struct fdent {
 	const char *name, *regs;
 };
 
-extern const struct fdent fd_exec[];
+extern const struct fdent fd_exec[], fd_dos[];
 
 struct libimpl {
 	const char *name;
@@ -55,7 +55,7 @@ struct amilib {
 	int index;
 };
 
-extern struct amilib lib_exec;
+extern struct amilib lib_exec, lib_dos;
 extern struct amilib *all_libs[];
 
 struct Library *lib_build(struct amilib *l);
@@ -66,6 +66,7 @@ extern struct frame *resume_frame;
 
 /* globals */
 extern struct ExecBase *SysBase;
+extern struct DosLibrary *DOSBase;
 extern struct Process *me;
 extern int af_trace;
 extern const char *af_progname;
@@ -81,16 +82,53 @@ BPTR hunk_load(const char *path, int *err);
 void hunk_unload(BPTR seg);
 int hunk_where(uint32_t addr, BPTR seg, int *hunk, uint32_t *off);
 
+/* path translation */
+void path_init(const char *progpath);
+int path_assign(const char *name, const char *target);
+char *path_to_linux(const char *apath, const char *cwd);
+const char *path_cwd(void);
+void path_set_cwd(const char *lpath);
+char *path_to_amiga(const char *lpath);
+void path_dump(FILE *f);
+
 /* exec */
-void exec_init(const char *taskname);
+void exec_init(void);
 void exec_pending_break(void);
 void exec_newlist(void *l);
 void exec_addtail(void *l, void *n);
 
-/* RawDoFmt engine */
+/* dos */
+void dos_init(int argc, char **argv, const char *prog, BPTR seg, uint32_t stack);
+void dos_flush_all(void);
+void dos_set_ioerr(int32_t e);
+int32_t dos_errno(int e);
+void dos_exit(int32_t code);
+extern char *dos_args;
+extern uint32_t dos_arglen;
+void dos_preload_args(const char *s, uint32_t len);
+int dos_take_args(const char **s, int32_t *len);
+
+/* RawDoFmt engine shared by exec and dos */
 typedef void (*putch_fn)(int c, void *ctx);
 uint32_t fmt_do(const char *fmt, uint32_t data, putch_fn put, void *ctx,
 		int bcpl);
+
+/* ReadArgs pieces */
+struct frame;
+uint32_t ra_readargs(const char *tmpl, int32_t *array, struct RDArgs *rd);
+void ra_freeargs(struct RDArgs *rd);
+int32_t ra_readitem(char *buf, int32_t max, struct CSource *cs);
+int32_t ra_findarg(const char *tmpl, const char *key);
+
+/* pattern matching */
+int32_t pat_parse(const char *src, char *dst, int32_t len, int nocase);
+int pat_match(const char *pat, const char *str, int nocase);
+int pat_matchraw(const char *pat, const char *str, int nocase);
+
+/* date */
+void date_now(struct DateStamp *ds);
+void date_from_unix(int64_t t, struct DateStamp *ds);
+int64_t date_to_unix(const struct DateStamp *ds);
 
 /* call a handler-visible Amiga function pointer with registers */
 uint32_t amiga_call(struct frame *f, uint32_t pc, struct regs *r);

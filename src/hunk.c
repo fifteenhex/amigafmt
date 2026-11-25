@@ -112,7 +112,7 @@ BPTR hunk_load(const char *path, int *err)
 
 	*err = 0;
 	if (!file) {
-		*err = ERROR_OBJECT_NOT_FOUND;
+		*err = dos_errno(errno);
 		return 0;
 	}
 	r.p = file;

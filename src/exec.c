@@ -358,6 +358,7 @@ static void e_Wait(struct frame *f)
 			return;
 		}
 		if (!(mask & 0xf000)) {
+			dos_flush_all();
 			af_die("%s: Wait($%x) for a signal nothing can send "
 			       "(single task); stopping", af_progname, mask);
 		}
@@ -409,12 +410,13 @@ static void e_Zero(struct frame *f) { RET(0); }
 static void e_RemTask(struct frame *f)
 {
 	if (!A(1) || A(1) == APTR_OF(me))
-		exit(0);
+		dos_exit(0);
 	af_die("RemTask() of another task");
 }
 
 static void e_Alert(struct frame *f)
 {
+	dos_flush_all();
 	fprintf(stderr, "amigafmt: %s: Alert $%08x\n", af_progname, D(7));
 	if (D(7) & 0x80000000)
 		exit(20);
@@ -886,9 +888,7 @@ struct amilib lib_exec = {
 	.init = exec_setup,
 };
 
-struct Process *me;
-
-void exec_init(const char *name)
+void exec_init(void)
 {
 	struct sigaction sa;
 	int i;
@@ -897,19 +897,6 @@ void exec_init(const char *name)
 	for (i = 0; all_libs[i]; i++)
 		addtail(all_libs[i]->device ? &SysBase->DeviceList :
 			&SysBase->LibList, &lib_build(all_libs[i])->lib_Node);
-
-	/* the program's task: dos.library will make it a Process */
-	me = amem_alloc(sizeof(*me) + 64);
-	SysBase->ThisTask = APTR_OF(me);
-	me->pr_Task.tc_Node.ln_Type = NT_TASK;
-	me->pr_Task.tc_Node.ln_Name = APTR_OF(name);
-	me->pr_Task.tc_State = 2;                       /* TS_RUN */
-	me->pr_Task.tc_SigAlloc = 0xffff;
-	newlist(&me->pr_Task.tc_MemEntry);
-	me->pr_MsgPort.mp_Node.ln_Type = NT_MSGPORT;
-	me->pr_MsgPort.mp_SigBit = 8;
-	me->pr_MsgPort.mp_SigTask = APTR_OF(me);
-	newlist(&me->pr_MsgPort.mp_MsgList);
 	memset(&sa, 0, sizeof(sa));
 	sa.sa_handler = on_signal;
 	sigaction(SIGINT, &sa, NULL);
@@ -918,6 +905,6 @@ void exec_init(const char *name)
 	sigaction(SIGUSR2, &sa, NULL);
 }
 
-/* NewList-style setup for the other libraries */
+/* used by dos for NewList-style setup */
 void exec_newlist(void *l) { newlist(l); }
 void exec_addtail(void *l, void *n) { addtail(l, n); }

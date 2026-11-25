@@ -1,0 +1,14 @@
+# amigafmt assigns: copy to /etc/amigafmt.conf or ~/.amigafmtrc
+# (or point $AMIGAFMT_CONF at it).  "NAME: target" or "assign NAME: target";
+# a target is a Linux directory or an Amiga path built on another assign.
+#
+# An AmigaOS boot partition mounted read-only as SYS:, e.g.
+#   mount -t affs -o ro /dev/sda1 /mnt/sys
+assign SYS: /mnt/sys
+assign Work: /mnt/lnx
+assign RAM: /tmp
+# C: S: L: LIBS: DEVS: FONTS: LOCALE: ENVARC: follow SYS: by default.
+#
+# Treat a leading / as the Linux root (as -u does) instead of AmigaOS's
+# "parent directory", so "List /etc" works from a Linux shell:
+#unixpaths yes
