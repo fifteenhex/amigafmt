@@ -7,6 +7,8 @@
  *   calls amiga_dispatch(frame), which returns the frame to resume from
  *   (normally the same one; StackSwap() hands back one on the new stack).
  *
+ * call_amiga_super(regs, pc): the same for Supervisor() functions.
+ *
  * call_amiga(regs, pc): run Amiga code with every register from *regs
  *   (a7 included) and a return address pushed on its stack; on return
  *   store the registers back and return d0.  native_sp is the native
@@ -37,6 +39,23 @@ call_amiga:
 	move.l	56(%sp),%a1		/* pc */
 	move.l	60(%a0),%a2		/* the Amiga sp */
 	move.l	#amiga_return,-(%a2)
+	move.l	%a1,-(%a2)
+	move.l	%a2,%sp
+	movem.l	(%a0),%d0-%d7/%a0-%a6
+	rts
+/* the same with an exception frame (format 0) for Supervisor(): the
+   function's RTE, emulated by the SIGILL handler, returns to amiga_return */
+	.globl	call_amiga_super
+call_amiga_super:
+	movem.l	%d2-%d7/%a2-%a6,-(%sp)
+	move.l	native_sp,-(%sp)
+	move.l	%sp,native_sp
+	move.l	52(%sp),%a0
+	move.l	56(%sp),%a1
+	move.l	60(%a0),%a2
+	move.w	#0,-(%a2)		/* format 0, vector 0 */
+	move.l	#amiga_return,-(%a2)	/* PC */
+	move.w	#0x2000,-(%a2)		/* SR: supervisor */
 	move.l	%a1,-(%a2)
 	move.l	%a2,%sp
 	movem.l	(%a0),%d0-%d7/%a0-%a6

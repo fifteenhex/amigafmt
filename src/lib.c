@@ -23,6 +23,7 @@ struct amilib *all_libs[] = { &lib_exec, &lib_dos, &lib_utility,
 			      &lib_version,
 			      NULL };
 struct frame *resume_frame;
+int dispatch_all_regs;
 
 /* the four vectors every library has, below the .fd bias of 30 */
 static void l_open(struct frame *f)
@@ -241,15 +242,25 @@ struct frame *amiga_dispatch(struct frame *f)
 	memcpy(keep, &f->d[2], 6 * 4);
 	memcpy(keep + 6, &f->a[2], 5 * 4);
 	exec_pending_break();
+	dispatch_all_regs = 0;
 	fn(f);
-	memcpy(&f->d[2], keep, 6 * 4);
-	memcpy(&f->a[2], keep + 6, 5 * 4);
+	if (!dispatch_all_regs) {
+		memcpy(&f->d[2], keep, 6 * 4);
+		memcpy(&f->a[2], keep + 6, 5 * 4);
+	}
+	dispatch_all_regs = 0;
 	if (af_trace)
 		trace_call(l, slot, f, 1);
 	exec_pending_break();
 	r = resume_frame;
 	resume_frame = outer;
 	return r;
+}
+
+uint32_t amiga_call_super(struct frame *f, uint32_t pc, struct regs *r)
+{
+	r->a[7] = ((uint32_t)(uintptr_t)f - 64) & ~3u;
+	return call_amiga_super(r, pc);
 }
 
 /* call Amiga code from inside a handler, on the Amiga stack below f */

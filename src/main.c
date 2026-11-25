@@ -29,9 +29,11 @@ static uint32_t stack_lo, stack_hi;
 
 /* ---- reads of memory that is not there: emulate the instruction ----
  *
- * Without page 0 (not root, or qemu-m68k) a read of address 4 faults.
- * The SIGSEGV handler decodes MOVE (byte, word, long; source (An), (An)+,
- * d16(An), abs.w, abs.l; any simple destination) and supplies the value.
+ * Without page 0 (not root, or qemu-m68k) a read of address 4 faults;
+ * so does any read of the custom chips, which programs like the 3.1.4
+ * C:CPU do to identify the chipset.  The SIGSEGV handler decodes MOVE
+ * (byte, word, long; source (An), (An)+, d16(An), abs.w, abs.l; any
+ * simple destination) and supplies the value.
  */
 static uint32_t *areg(greg_t *g, int n) { return (uint32_t *)&g[R_A0 + n]; }
 
@@ -60,6 +62,17 @@ static int src_ea(greg_t *g, const uint16_t *ext, int mode, int reg,
 	return -1;
 }
 
+/* custom chip registers a program may read: an AGA machine */
+static uint16_t custom_read(uint32_t off)
+{
+	switch (off & 0x1fe) {
+	case 0x002: return 0x03f0;              /* DMACONR */
+	case 0x004: return 0x3300;              /* VPOSR: Alice, NTSC */
+	case 0x07c: return 0x00f8;              /* DENISEID: Lisa */
+	default: return 0;
+	}
+}
+
 /* the value of [addr, addr+size) if it is something we stand in for */
 static int virt_read(uint32_t addr, int size, uint32_t *v)
 {
@@ -70,6 +83,8 @@ static int virt_read(uint32_t addr, int size, uint32_t *v)
 		uint32_t x = addr + i;
 		if (x < 8 && !page0)
 			b[i] = x < 4 ? 0 : APTR_OF(SysBase) >> (8 * (7 - x));
+		else if (x >= 0xdff000 && x < 0xdff200)
+			b[i] = custom_read(x - 0xdff000) >> (x & 1 ? 0 : 8);
 		else
 			return 0;
 	}
@@ -158,6 +173,152 @@ static int emulate_load(greg_t *g)
 	return 1;
 }
 
+/* a MOVE into the custom chips: discarded (CPU writes $DFF004 to see
+   whether the bus gives it back) */
+static int emulate_store(greg_t *g)
+{
+	const uint16_t *pc = (const uint16_t *)(uintptr_t)g[R_PC];
+	uint16_t op = pc[0];
+	int smode = (op >> 3) & 7, sreg = op & 7;
+	int dmode = (op >> 6) & 7, dreg = (op >> 9) & 7, size, ns = 0, nd;
+	uint32_t ea, *a;
+
+	switch (op >> 12) {
+	case 1: size = 1; break;
+	case 2: size = 4; break;
+	case 3: size = 2; break;
+	default: return 0;
+	}
+	if (smode == 7 && sreg == 4)            /* #imm */
+		ns = size == 4 ? 2 : 1;
+	else if (smode > 1)
+		return 0;                       /* only Dn, An, #imm sources */
+	a = areg(g, dreg);
+	switch (dmode) {
+	case 2: case 3: ea = *a; nd = 0; break;
+	case 4: ea = *a - size; nd = 0; break;
+	case 5: ea = *a + (int16_t)pc[1 + ns]; nd = 1; break;
+	case 7:
+		if (dreg == 0) {
+			ea = (int16_t)pc[1 + ns];
+			nd = 1;
+		} else if (dreg == 1) {
+			ea = (uint32_t)pc[1 + ns] << 16 | pc[2 + ns];
+			nd = 2;
+		} else
+			return 0;
+		break;
+	default:
+		return 0;
+	}
+	if (ea < 0xdff000 || ea >= 0xdff200)
+		return 0;
+	if (dmode == 3)
+		*a += size;
+	else if (dmode == 4)
+		*a -= size;
+	if (af_trace)
+		af_warn("write to custom chip register $%x ignored", ea);
+	g[R_PC] += 2 + 2 * (ns + nd);
+	return 1;
+}
+
+/*
+ * Privileged instructions.  MOVE from SR is privileged on the 68010 and
+ * up but plain user code on a 68000, so it is emulated always; the rest
+ * only inside Supervisor().
+ */
+static uint32_t movec_read(int rc, greg_t *g)
+{
+	int cpu = SysBase && (SysBase->AttnFlags & AFF_68060) ? 68060 : 68040;
+
+	switch (rc) {
+	case 0x002:                             /* CACR: both caches on */
+		return cpu == 68060 ? 0xa0808000 : 0x80008000;
+	case 0x003:                             /* TC: MMU on, 4K pages */
+		return 0x8000;
+	case 0x800:                             /* USP */
+		return g[R_SP];
+	case 0x808:                             /* PCR: 68060, revision 6 */
+		return 0x04300600;
+	default:                                /* SFC DFC TTx VBR ... */
+		return 0;
+	}
+}
+
+static int emulate_priv(greg_t *g)
+{
+	uint16_t *pc = (uint16_t *)(uintptr_t)g[R_PC];
+	uint16_t op = pc[0];
+	uint32_t *sp, *rp;
+	int reg = op & 7;
+
+	if ((op & 0xfff8) == 0x40c0) {          /* move sr,dn */
+		g[R_D0 + reg] = (g[R_D0 + reg] & 0xffff0000) |
+				(g[R_PS] & 0xff) | (in_supervisor ? 0x2000 : 0);
+		g[R_PC] += 2;
+		return 1;
+	}
+	if (!in_supervisor)
+		return 0;
+	switch (op) {
+	case 0x4e73: {                          /* rte */
+		uint8_t *s = (uint8_t *)(uintptr_t)g[R_SP];
+		int fmt = (s[6] >> 4) & 15;
+		g[R_PS] = (g[R_PS] & ~0xff) | s[1];
+		g[R_PC] = (uint32_t)s[2] << 24 | s[3] << 16 | s[4] << 8 | s[5];
+		g[R_SP] += fmt == 2 || fmt == 3 ? 12 : fmt == 4 ? 16 : 8;
+		return 1;
+	}
+	case 0x4e7a:                            /* movec rc,rn */
+		rp = (uint32_t *)&g[(pc[1] & 0x8000 ? R_A0 : R_D0) +
+				    ((pc[1] >> 12) & 7)];
+		*rp = movec_read(pc[1] & 0xfff, g);
+		g[R_PC] += 4;
+		return 1;
+	case 0x4e7b:                            /* movec rn,rc: accepted */
+	case 0x007c:                            /* ori.w #x,sr */
+	case 0x027c:                            /* andi.w #x,sr */
+	case 0x0a7c:                            /* eori.w #x,sr */
+	case 0x46fc:                            /* move #x,sr */
+		g[R_PC] += 4;
+		return 1;
+	}
+	if ((op & 0xfff8) == 0x46c0 ||          /* move dn,sr */
+	    (op & 0xfff8) == 0x4e60) {          /* move an,usp */
+		g[R_PC] += 2;
+		return 1;
+	}
+	if ((op & 0xfff8) == 0x4e68) {          /* move usp,an */
+		g[R_A0 + reg] = g[R_SP];
+		g[R_PC] += 2;
+		return 1;
+	}
+	if ((op & 0xff00) == 0xf400 || (op & 0xff00) == 0xf500) {
+		cache_flush(0, 0xffffffff);     /* cinv/cpush, pflush */
+		g[R_PC] += 2;
+		return 1;
+	}
+	if ((op & 0xff80) == 0xf300) {          /* fsave/frestore: null frames */
+		int mode = (op >> 3) & 7, save = !(op & 0x40);
+		rp = (uint32_t *)&g[R_A0 + reg];
+		if (mode == 4 && save) {
+			*rp -= 4;
+			sp = (uint32_t *)(uintptr_t)*rp;
+			*sp = 0;
+		} else if (mode == 3 && !save) {
+			*rp += 4;
+		} else if (mode == 2) {
+			if (save)
+				*(uint32_t *)(uintptr_t)*rp = 0;
+		} else
+			return 0;
+		g[R_PC] += 2;
+		return 1;
+	}
+	return 0;
+}
+
 static void on_fault(int sig, siginfo_t *si, void *ucv)
 {
 	ucontext_t *uc = ucv;
@@ -165,7 +326,9 @@ static void on_fault(int sig, siginfo_t *si, void *ucv)
 	uint32_t pc = g[R_PC], off;
 	int h, i;
 
-	if (sig == SIGSEGV && SysBase && emulate_load(g))
+	if (sig == SIGSEGV && SysBase && (emulate_load(g) || emulate_store(g)))
+		return;
+	if ((sig == SIGILL || sig == SIGSEGV) && emulate_priv(g))
 		return;
 	dos_flush_all();
 	fprintf(stderr, "amigafmt: %s: %s at $%08x, address $%08lx", af_progname,

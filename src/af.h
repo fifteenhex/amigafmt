@@ -22,6 +22,9 @@ struct frame {
 };
 
 uint32_t call_amiga(struct regs *r, uint32_t pc);
+uint32_t call_amiga_super(struct regs *r, uint32_t pc);
+extern int in_supervisor;
+extern int dispatch_all_regs;
 extern uint32_t native_sp;
 
 /* a library vector's implementation */
@@ -133,6 +136,7 @@ int64_t date_to_unix(const struct DateStamp *ds);
 
 /* call a handler-visible Amiga function pointer with registers */
 uint32_t amiga_call(struct frame *f, uint32_t pc, struct regs *r);
+uint32_t amiga_call_super(struct frame *f, uint32_t pc, struct regs *r);
 
 #define D(n) (f->d[n])
 #define A(n) (f->a[n])

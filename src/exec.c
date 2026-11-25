@@ -422,6 +422,28 @@ static void e_Alert(struct frame *f)
 		exit(20);
 }
 
+/*
+ * Supervisor(): run the function in user mode on a fake exception frame;
+ * the SIGILL handler emulates the privileged instructions such code uses
+ * (MOVEC reads, MOVE SR, cache pushes, FSAVE/FRESTORE) and its RTE.
+ * Everything the function leaves in the registers goes back to the caller.
+ */
+int in_supervisor;
+
+static void e_Supervisor(struct frame *f)
+{
+	struct regs r;
+
+	memcpy(r.d, f->d, sizeof(r.d));
+	memcpy(r.a, f->a, 7 * 4);
+	in_supervisor++;
+	amiga_call_super(f, A(5), &r);
+	in_supervisor--;
+	memcpy(f->d, r.d, sizeof(r.d));
+	memcpy(f->a, r.a, 7 * 4);
+	dispatch_all_regs = 1;
+}
+
 /* ---- ports and messages ---- */
 
 static void putmsg(struct MsgPort *p, struct Message *m)
@@ -774,6 +796,7 @@ static void e_StackSwap(struct frame *f)
 static const struct libimpl exec_impl[] = {
 	{ "Disable", e_Nop }, { "Enable", e_Nop },
 	{ "Forbid", e_Nop }, { "Permit", e_Nop },
+	{ "Supervisor", e_Supervisor },
 	{ "SetSR", e_Zero }, { "SuperState", e_Zero }, { "UserState", e_Nop },
 	{ "GetCC", e_Zero }, { "Debug", e_Nop }, { "Alert", e_Alert },
 	{ "Insert", e_Insert }, { "AddHead", e_AddHead },
