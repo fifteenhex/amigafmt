@@ -6,7 +6,11 @@
  * patched by seeking back when PushChunk() was given IFFSIZE_UNKNOWN.
  * Supported: SCAN and STEP parsing, stop/prop/collection chunks,
  * StopOnExit, FindProp/FindCollection, CurrentChunk/ParentChunk, chunk
- * reads and writes.  Clipboard streams and custom stream hooks are not.
+ * reads and writes.  A custom stream hook (InitIFF) works too: reading
+ * takes the outermost chunk's header and then its size through the hook;
+ * writing is kept in memory (sizes patched there) and goes through the
+ * hook in one piece when the outermost chunk is done.  Clipboard streams
+ * are not supported.
  */
 #include <stdlib.h>
 #include <string.h>
@@ -65,6 +69,9 @@ struct iff {
 	uint32_t stops[64][2], props[64][2], colls[64][2], exits[64][2];
 	int nstops, nprops, ncolls, nexits;
 	struct sprop *stored;
+	uint32_t hook;                  /* InitIFF's stream hook, 0 for DOS */
+	uint8_t *wbuf;                  /* writing through a hook: kept here */
+	uint32_t wlen, wcap, wpos;
 	struct iff *next;
 };
 
@@ -90,6 +97,62 @@ static void set_depth(struct iff *f)
 	((int32_t *)PTR(f->addr))[2] = f->depth;        /* iff_Depth */
 }
 
+/* the stream hook: a0 hook, a2 the IFFHandle, a1 the IFFStreamCmd */
+#define IFFCMD_INIT 0
+#define IFFCMD_CLEANUP 1
+#define IFFCMD_READ 2
+#define IFFCMD_WRITE 3
+#define IFFCMD_SEEK 4
+
+static int32_t hook_cmd(struct iff *f, int32_t cmd, void *buf, int32_t n)
+{
+	int32_t *sc = amem_alloc(12);
+	struct regs r;
+	int32_t ret;
+
+	sc[0] = cmd;
+	sc[1] = APTR_OF(buf);
+	sc[2] = n;
+	regs_caller(&r, resume_frame);
+	r.a[0] = f->hook;
+	r.a[1] = APTR_OF(sc);
+	r.a[2] = f->addr;
+	ret = amiga_call(resume_frame, *(uint32_t *)((uint8_t *)PTR(f->hook) + 8), &r);
+	amem_free(sc);
+	return ret;
+}
+
+/* the whole outermost chunk through the hook (its header says how long) */
+static int load_hook(struct iff *f)
+{
+	uint8_t *tmp = amem_alloc(8);
+	uint32_t size;
+
+	if (hook_cmd(f, IFFCMD_READ, tmp, 8)) {
+		amem_free(tmp);
+		f->loaded = 1;
+		return 0;               /* empty: parse says EOF */
+	}
+	size = be32(tmp + 4);
+	if (size > 64 << 20) {
+		amem_free(tmp);
+		return IFFERR_MANGLED;
+	}
+	f->buf = malloc(8 + size + 1);
+	memcpy(f->buf, tmp, 8);
+	amem_free(tmp);
+	tmp = amem_alloc(size + 2);
+	if (hook_cmd(f, IFFCMD_READ, tmp, size)) {
+		amem_free(tmp);
+		return IFFERR_READ;
+	}
+	memcpy(f->buf + 8, tmp, size);
+	amem_free(tmp);
+	f->len = 8 + size;
+	f->loaded = 1;
+	return 0;
+}
+
 static struct afh *stream(struct iff *f)
 {
 	return fh_priv(*(uint32_t *)PTR(f->addr));      /* iff_Stream */
@@ -97,12 +160,14 @@ static struct afh *stream(struct iff *f)
 
 static int load(struct iff *f)
 {
-	struct afh *a = stream(f);
+	struct afh *a = f->hook ? NULL : stream(f);
 	uint32_t cap = 65536;
 	int32_t n;
 
 	if (f->loaded)
 		return 0;
+	if (f->hook)
+		return load_hook(f);
 	if (!a)
 		return IFFERR_READ;
 	f->buf = malloc(cap);
@@ -247,23 +312,54 @@ static int32_t parse(struct iff *f, int mode)
 
 static int wr(struct iff *f, const void *p, uint32_t n)
 {
-	struct afh *a = stream(f);
+	struct afh *a;
 
+	if (f->hook) {
+		if (f->wpos + n > f->wcap) {
+			f->wcap = (f->wpos + n) * 2 + 4096;
+			f->wbuf = realloc(f->wbuf, f->wcap);
+		}
+		memcpy(f->wbuf + f->wpos, p, n);
+		f->wpos += n;
+		if (f->wpos > f->wlen)
+			f->wlen = f->wpos;
+		return 0;
+	}
+	a = stream(f);
 	return a && fh_write(a, p, n) == (int32_t)n ? 0 : IFFERR_WRITE;
+}
+
+/* writing through a hook: the memory copy to the stream */
+static int wflush_hook(struct iff *f)
+{
+	uint8_t *tmp;
+	int32_t r;
+
+	if (!f->wlen)
+		return 0;
+	tmp = amem_alloc(f->wlen);
+	memcpy(tmp, f->wbuf, f->wlen);
+	r = hook_cmd(f, IFFCMD_WRITE, tmp, f->wlen);
+	amem_free(tmp);
+	f->wlen = f->wpos = 0;
+	return r ? IFFERR_WRITE : 0;
 }
 
 static int32_t push_w(struct iff *f, uint32_t type, uint32_t id, int32_t size)
 {
-	struct afh *a = stream(f);
+	struct afh *a = f->hook ? NULL : stream(f);
 	uint8_t h[12];
 	int container = id == ID_FORM || id == ID_LIST || id == ID_CAT ||
 			id == ID_PROP;
 	off_t here;
 
-	if (!a || f->depth == 32)
+	if ((!a && !f->hook) || f->depth == 32)
 		return IFFERR_WRITE;
-	fh_flush(a);
-	here = lseek(a->wfd, 0, SEEK_CUR);
+	if (a) {
+		fh_flush(a);
+		here = lseek(a->wfd, 0, SEEK_CUR);
+	} else
+		here = f->wpos;
 	h[0] = id >> 24, h[1] = id >> 16, h[2] = id >> 8, h[3] = id;
 	{
 		uint32_t s = size < 0 ? 0 : (uint32_t)size + (container ? 4 : 0);
@@ -283,18 +379,22 @@ static int32_t push_w(struct iff *f, uint32_t type, uint32_t id, int32_t size)
 
 static int32_t pop_w(struct iff *f)
 {
-	struct afh *a = stream(f);
+	struct afh *a = f->hook ? NULL : stream(f);
 	struct ctx *c;
 	uint32_t n;
 
-	if (!f->depth || !a)
+	if (!f->depth || (!a && !f->hook))
 		return IFFERR_EOF;
 	c = &f->stack[f->depth - 1];
 	n = c->cn->cn_Scan + (c->container ? 4 : 0);
 	if (c->cn->cn_Scan & 1)
 		wr(f, "", 1);
-	fh_flush(a);
-	if (c->wsize_unknown || (uint32_t)c->cn->cn_Size != c->cn->cn_Scan) {
+	if (f->hook) {
+		uint8_t *s = f->wbuf + c->wpos;
+		s[0] = n >> 24, s[1] = n >> 16, s[2] = n >> 8, s[3] = n;
+	} else
+		fh_flush(a);
+	if (!f->hook && (c->wsize_unknown || (uint32_t)c->cn->cn_Size != c->cn->cn_Scan)) {
 		off_t back = lseek(a->wfd, 0, SEEK_CUR);
 		uint8_t s[4] = { n >> 24, n >> 16, n >> 8, n };
 		lseek(a->wfd, c->wpos, SEEK_SET);
@@ -306,6 +406,8 @@ static int32_t pop_w(struct iff *f)
 	amem_free(c->cn);
 	f->depth--;
 	set_depth(f);
+	if (f->hook && !f->depth)
+		return wflush_hook(f);
 	if (f->depth)
 		f->stack[f->depth - 1].cn->cn_Scan += n -
 			(f->stack[f->depth - 1].container ? 0 : 0);
@@ -332,12 +434,30 @@ static void ip_FreeIFF(struct frame *f)
 		if (i->addr == A(0)) {
 			*pp = i->next;
 			free(i->buf);
+			free(i->wbuf);
 			free(i);
 			break;
 		}
 }
 
 static void ip_Nop(struct frame *f) { (void)f; }
+
+/* InitIFF(iff, flags, streamHook): a stream of the program's own */
+static void ip_InitIFF(struct frame *f)
+{
+	struct iff *i = IFF(A(0));
+
+	if (i)
+		i->hook = A(1);
+}
+
+static void ip_InitIFFasDOS(struct frame *f)
+{
+	struct iff *i = IFF(A(0));
+
+	if (i)
+		i->hook = 0;
+}
 
 static void ip_OpenIFF(struct frame *f)
 {
@@ -348,6 +468,11 @@ static void ip_OpenIFF(struct frame *f)
 		return;
 	}
 	i->write = D(0) & 1;                    /* IFFF_WRITE */
+	i->wlen = i->wpos = 0;
+	if (i->hook && hook_cmd(i, IFFCMD_INIT, NULL, 0)) {
+		RET(IFFERR_NOSCOPE);
+		return;
+	}
 	i->loaded = 0;
 	i->pos = 0;
 	i->depth = 0;
@@ -365,6 +490,10 @@ static void ip_CloseIFF(struct frame *f)
 		pop_w(i);
 	while (!i->write && i->depth)
 		pop(i);
+	if (i->hook) {
+		wflush_hook(i);
+		hook_cmd(i, IFFCMD_CLEANUP, NULL, 0);
+	}
 	free(i->buf);
 	i->buf = NULL;
 	i->loaded = 0;
@@ -624,7 +753,7 @@ static void ip_IDtoStr(struct frame *f)
 
 static const struct libimpl iffparse_impl[] = {
 	{ "AllocIFF", ip_AllocIFF }, { "FreeIFF", ip_FreeIFF },
-	{ "InitIFFasDOS", ip_Nop }, { "InitIFF", ip_Nop },
+	{ "InitIFFasDOS", ip_InitIFFasDOS }, { "InitIFF", ip_InitIFF },
 	{ "InitIFFasClip", ip_Nop },
 	{ "OpenIFF", ip_OpenIFF }, { "CloseIFF", ip_CloseIFF },
 	{ "ParseIFF", ip_ParseIFF },
