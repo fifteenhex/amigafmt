@@ -38,7 +38,7 @@ struct fdent {
 extern const struct fdent fd_exec[], fd_dos[], fd_utility[], fd_intuition[],
 	fd_graphics[], fd_locale[], fd_mathieeedoubbas[], fd_mathieeedoubtrans[],
 	fd_mathieeesingbas[], fd_mathieeesingtrans[], fd_mathffp[], fd_mathtrans[],
-	fd_icon[], fd_iffparse[];
+	fd_icon[], fd_iffparse[], fd_bsdsocket[];
 
 struct libimpl {
 	const char *name;
@@ -57,6 +57,7 @@ struct amilib {
 	int hidden;                     /* internal: in no exec list */
 	const struct libimpl *impl2;    /* more implementations */
 	const struct libimpl *impl3;    /* and more, bound last */
+	const struct libimpl *const *impls;     /* a NULL-ended list of more */
 	/* a base per opener (bsdsocket): OpenLibrary returns open()'s copy
 	   of the base; CloseLibrary offers every base to close() first */
 	struct Library *(*open)(struct amilib *l);
@@ -72,7 +73,7 @@ extern struct amilib lib_exec, lib_dos, lib_utility, lib_version,
 	lib_intuition, lib_graphics, lib_gadtools, lib_mathieeedoubbas,
 	lib_mathieeedoubtrans, lib_mathieeesingbas, lib_mathieeesingtrans,
 	lib_mathffp, lib_mathtrans, lib_timer, lib_icon, lib_layers, lib_console, lib_asl, lib_iffparse, lib_boopsi, lib_workbench, lib_datatypes,
-	lib_diskfont, lib_locale, lib_keymap, lib_input;
+	lib_diskfont, lib_locale, lib_keymap, lib_input, lib_bsdsocket;
 extern struct amilib *all_libs[];
 
 struct Library *lib_build(struct amilib *l);

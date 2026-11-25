@@ -37,8 +37,8 @@ srcs = files(
   'src/gfx.c', 'src/gui.c', 'src/gadtools.c', 'src/icon.c', 'src/console.c',
   'src/iffparse.c', 'src/boopsi.c', 'src/asl.c', 'src/math.c', 'src/timer.c',
   'src/diskfont.c', 'src/ramlib.c', 'src/locale.c', 'src/task.c',
-  'src/screen.c', 'src/blitter.c', 'src/netdb.c', 'src/fdtab.c',
-  'src/glue.S')
+  'src/screen.c', 'src/blitter.c', 'src/bsdsocket.c', 'src/netdb.c',
+  'src/fdtab.c', 'src/glue.S')
 amigafmt = executable('amigafmt', srcs,
   dependencies: [libm, threads],
   install: true)
@@ -51,7 +51,7 @@ install_data('README.md', install_dir: get_option('datadir') / 'doc' / 'amigafmt
 # the vector tables, regenerated from the .fd files into the source tree
 fds = ['exec', 'dos', 'utility', 'intuition', 'graphics', 'locale', 'icon',
        'iffparse', 'mathieeedoubbas', 'mathieeedoubtrans', 'mathieeesingbas',
-       'mathieeesingtrans', 'mathffp', 'mathtrans']
+       'mathieeesingtrans', 'mathffp', 'mathtrans', 'bsdsocket']
 run_target('fdtab',
   command: [files('tools/fdtab.sh'), files('tools/fd2c.py'),
             meson.current_source_dir() / 'src' / 'fdtab.c', get_option('fd_dir')] + fds)

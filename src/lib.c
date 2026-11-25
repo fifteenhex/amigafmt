@@ -27,7 +27,7 @@ struct amilib *all_libs[] = { &lib_exec, &lib_dos, &lib_utility,
 			      &lib_mathtrans, &lib_timer, &lib_icon, &lib_layers, &lib_console, &lib_asl,
 			      &lib_iffparse, &lib_boopsi, &lib_workbench,
 			      &lib_datatypes, &lib_diskfont, &lib_locale,
-			      &lib_keymap, &lib_input, NULL };
+			      &lib_keymap, &lib_input, &lib_bsdsocket, NULL };
 struct frame *resume_frame;
 int dispatch_all_regs;
 
@@ -119,6 +119,8 @@ struct Library *lib_build(struct amilib *l)
 	bind(l, l->impl);
 	bind(l, l->impl2);
 	bind(l, l->impl3);
+	for (i = 0; l->impls && l->impls[i]; i++)
+		bind(l, l->impls[i]);
 
 	neg = (l->nslots * 6 + 3) & ~3u;
 	mem = amem_alloc(neg + sizeof(struct Library) + l->possize
