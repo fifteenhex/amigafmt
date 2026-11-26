@@ -1100,6 +1100,43 @@ static void d_RemAssignList(struct frame *f)
 	RET(DOSTRUE);
 }
 
+/*
+ * DOS list entries a program makes (C:Mount): built and freed, never
+ * added, because a device needs a handler to run it and there are none
+ * here.  AddDosEntry() refuses with ERROR_NOT_IMPLEMENTED.
+ */
+static void d_MakeDosEntry(struct frame *f)
+{
+	const char *name = PTR(D(1));
+	size_t n = strlen(name);
+	uint8_t *dl = amem_alloc(44 + n + 2);
+
+	if (!dl) {
+		dos_set_ioerr(ERROR_NO_FREE_STORE);
+		RET(0);
+		return;
+	}
+	if (n > 255)
+		n = 255;
+	*(int32_t *)(dl + 4) = D(2);                    /* dol_Type */
+	dl[44] = n;
+	memcpy(dl + 45, name, n);
+	*(BPTR *)(dl + 40) = MKBADDR(dl + 44);          /* dol_Name */
+	RET(dl);
+}
+
+static void d_FreeDosEntry(struct frame *f)
+{
+	if (D(1))
+		amem_free(PTR(D(1)));
+}
+
+static void d_AddDosEntry(struct frame *f)
+{
+	dos_set_ioerr(ERROR_NOT_IMPLEMENTED);
+	RET(DOSFALSE);
+}
+
 /* ---- MatchFirst / MatchNext ---- */
 
 struct mlevel {
@@ -1451,6 +1488,8 @@ const struct libimpl dos_impl_lock[] = {
 	{ "ChangeMode", d_True },
 	{ "LockDosList", d_LockDosList },
 	{ "AttemptLockDosList", d_LockDosList },
+	{ "MakeDosEntry", d_MakeDosEntry }, { "FreeDosEntry", d_FreeDosEntry },
+	{ "AddDosEntry", d_AddDosEntry }, { "RemDosEntry", d_AddDosEntry },
 	{ "UnLockDosList", d_UnLockDosList },
 	{ "NextDosEntry", d_NextDosEntry }, { "FindDosEntry", d_FindDosEntry },
 	{ "GetDeviceProc", d_GetDeviceProc },
