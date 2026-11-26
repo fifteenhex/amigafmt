@@ -106,6 +106,8 @@ int hunk_where(uint32_t addr, BPTR seg, int *hunk, uint32_t *off);
 /* path translation */
 void path_init(const char *progpath);
 int path_assign(const char *name, const char *target);
+int path_unassign(const char *name);
+int path_assign_dir(const char *name, const char *target);
 char *path_to_linux(const char *apath, const char *cwd);
 const char *path_cwd(void);
 void path_set_cwd(const char *lpath);

@@ -957,10 +957,133 @@ static void d_DeviceProc(struct frame *f)
 	dos_set_ioerr(0);
 }
 
-static void d_AssignNotImpl(struct frame *f)
+/*
+ * Assigns made while the program runs (C:Assign, a script's assigns):
+ * path.c's table, and a DOS list entry so that they are listed.  One
+ * directory each: AssignAdd() only makes a new one.
+ */
+static int dl_find_assign(const char *name)
 {
-	dos_set_ioerr(ERROR_NOT_IMPLEMENTED);
-	RET(DOSFALSE);
+	size_t l = strlen(name);
+	int i;
+
+	if (l && name[l - 1] == ':')
+		l--;
+	dl_build();
+	for (i = 0; i < dl_count; i++) {
+		int32_t t = *(int32_t *)(dl_head[i].node + 4);
+		if ((t == 1 || t == 3 || t == 4) && dl_head[i].name[0] == l &&
+		    !strncasecmp((char *)dl_head[i].name + 1, name, l))
+			return i;
+	}
+	return -1;
+}
+
+static void dl_remove(int i)
+{
+	*(int32_t *)(dl_head[i].node + 4) = -1;         /* skipped */
+	dl_head[i].name[0] = 0;
+	if (i)
+		*(BPTR *)dl_head[i - 1].node = *(BPTR *)dl_head[i].node;
+}
+
+static struct dlent *dl_assign(const char *name, int32_t type)
+{
+	char n[32];
+	size_t l = strlen(name);
+	int i = dl_find_assign(name);
+
+	if (l && name[l - 1] == ':')
+		l--;
+	if (l >= sizeof(n))
+		l = sizeof(n) - 1;
+	memcpy(n, name, l);
+	n[l] = 0;
+	if (i >= 0) {
+		BPTR old = *(BPTR *)(dl_head[i].node + 12);
+		if (old)
+			lock_free(old);
+		*(BPTR *)(dl_head[i].node + 12) = 0;
+		*(int32_t *)(dl_head[i].node + 4) = type;
+		return &dl_head[i];
+	}
+	if (dl_count == 64)
+		return NULL;
+	return dl_add(n, type);
+}
+
+static void d_AssignLock(struct frame *f)
+{
+	const char *name = PTR(D(1));
+	struct dlent *e;
+	int i;
+
+	if (!D(2)) {                            /* remove it */
+		i = dl_find_assign(name);
+		if (!path_unassign(name) && i < 0) {
+			dos_set_ioerr(ERROR_OBJECT_NOT_FOUND);
+			RET(DOSFALSE);
+			return;
+		}
+		if (i >= 0)
+			dl_remove(i);
+		RET(DOSTRUE);
+		return;
+	}
+	path_assign_dir(name, lock_path(D(2)));
+	e = dl_assign(name, 1);                 /* DLT_DIRECTORY */
+	if (e)
+		*(BPTR *)(e->node + 12) = D(2);         /* the lock is ours now */
+	RET(DOSTRUE);
+}
+
+/* AssignLate and AssignPath: the target stays a path */
+static void assign_path(struct frame *f, int32_t type)
+{
+	const char *path = PTR(D(2));
+	struct dlent *e;
+	char *copy;
+
+	path_assign_dir(PTR(D(1)), path);
+	e = dl_assign(PTR(D(1)), type);
+	if (e) {
+		copy = amem_alloc(strlen(path) + 1);
+		strcpy(copy, path);
+		*(APTR *)(e->node + 16) = APTR_OF(copy);   /* dol_AssignName */
+	}
+	RET(DOSTRUE);
+}
+
+static void d_AssignLate(struct frame *f) { assign_path(f, 3); }
+static void d_AssignPath(struct frame *f) { assign_path(f, 4); }
+
+static void d_AssignAdd(struct frame *f)
+{
+	if (dl_find_assign(PTR(D(1))) >= 0) {
+		dos_set_ioerr(ERROR_OBJECT_EXISTS);
+		RET(DOSFALSE);
+		return;
+	}
+	d_AssignLock(f);
+}
+
+static void d_RemAssignList(struct frame *f)
+{
+	int i = dl_find_assign(PTR(D(1)));
+	BPTR l;
+
+	if (i < 0) {
+		RET(DOSFALSE);
+		return;
+	}
+	l = *(BPTR *)(dl_head[i].node + 12);
+	if (l && D(2) && strcmp(lock_path(l), lock_path(D(2)))) {
+		RET(DOSFALSE);
+		return;
+	}
+	path_unassign(PTR(D(1)));
+	dl_remove(i);
+	RET(DOSTRUE);
 }
 
 /* ---- MatchFirst / MatchNext ---- */
@@ -1319,9 +1442,9 @@ const struct libimpl dos_impl_lock[] = {
 	{ "GetDeviceProc", d_GetDeviceProc },
 	{ "FreeDeviceProc", d_FreeDeviceProc },
 	{ "DeviceProc", d_DeviceProc },
-	{ "AssignLock", d_AssignNotImpl }, { "AssignLate", d_AssignNotImpl },
-	{ "AssignPath", d_AssignNotImpl }, { "AssignAdd", d_AssignNotImpl },
-	{ "RemAssignList", d_AssignNotImpl },
+	{ "AssignLock", d_AssignLock }, { "AssignLate", d_AssignLate },
+	{ "AssignPath", d_AssignPath }, { "AssignAdd", d_AssignAdd },
+	{ "RemAssignList", d_RemAssignList },
 	{ "MatchFirst", d_MatchFirst }, { "MatchNext", d_MatchNext },
 	{ "MatchEnd", d_MatchEnd },
 	{ NULL, NULL }
