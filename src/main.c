@@ -459,6 +459,8 @@ static void on_fault(int sig, siginfo_t *si, void *ucv)
 	uint32_t pc = g[R_PC], off;
 	int h, i;
 
+	if (sig == SIGSEGV && (uint32_t)(uintptr_t)si->si_addr == pc)
+		goto crash;     /* a jump into nowhere: no instruction to decode */
 	if (sig == SIGSEGV && screen_plane_fault((uint32_t)(uintptr_t)si->si_addr))
 		return;         /* a write to a screen's planes: noted, page open */
 	if (sig == SIGSEGV && SysBase && (emulate_load(g) || emulate_store(g) ||
@@ -468,6 +470,7 @@ static void on_fault(int sig, siginfo_t *si, void *ucv)
 		return;
 	if (task_trap(sig, si, g))
 		return;
+crash:
 	dos_flush_all();
 	fprintf(stderr, "amigafmt: %s: %s at $%08x, address $%08lx", af_progname,
 		strsignal(sig), pc, (unsigned long)(uintptr_t)si->si_addr);
