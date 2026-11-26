@@ -5,6 +5,7 @@
      tcli exit <n>       Exit(n) from inside a nested function
      tcli internal       run the shell's Echo through FindSegment/RunCommand
      tcli vars           GetVar/SetVar, local and global
+     tcli pkt            SendPkt and WaitPkt to a filesystem and the console
      tcli cd             CD through System(), in a directory with "boards"
                          and "devices" (the machine-sysfs board directory) */
 #include "t.h"
@@ -121,6 +122,41 @@ int main(u32 arglen, char *args)
 		call(DOSBase, LVOSetVar, "d1d2d3d4", "afvar", 0, 0, 0x100);
 		n = call(DOSBase, LVOGetVar, "d1d2d3d4", "afvar", buf, 64, 0x100);
 		printf("deleted %ld\n", n);
+		return 0;
+	}
+	if (!strcmp(cmd, "pkt")) {
+		s32 *dp = (s32 *)call(DOSBase, LVOAllocDosObject, "d1d2", 3, 0);
+		u32 me = call(SysBase, LVOFindTask, "a1", 0);
+		u32 port = call(DOSBase, LVODeviceProc, "d1", "SYS:");
+		s32 *got;
+		dp[2] = 1027;                   /* ACTION_IS_FILESYSTEM */
+		call(DOSBase, LVOSendPkt, "d1d2d3", dp, port, me + 92);
+		got = (s32 *)call(DOSBase, LVOWaitPkt, "");
+		printf("filesystem: same packet %ld, res1 %ld\n", got == dp, got[3]);
+		dp[2] = 1027;
+		port = *(u32 *)(me + 164);      /* pr_ConsoleTask */
+		call(DOSBase, LVOSendPkt, "d1d2d3", dp, port, me + 92);
+		got = (s32 *)call(DOSBase, LVOWaitPkt, "");
+		printf("console: res1 %ld\n", got[3]);
+		dp[2] = 12345;
+		call(DOSBase, LVOSendPkt, "d1d2d3", dp, port, me + 92);
+		got = (s32 *)call(DOSBase, LVOWaitPkt, "");
+		printf("unknown: res1 %ld res2 %ld\n", got[3], got[4]);
+		/* PutMsg of the packet's message is a packet too */
+		dp[2] = 1027;
+		dp[1] = me + 92;                /* dp_Port: the reply port */
+		call(SysBase, LVOPutMsg, "a0a1", port, dp[0]);
+		got = (s32 *)call(DOSBase, LVOWaitPkt, "");
+		printf("PutMsg packet: same %ld, res1 %ld\n", got == dp, got[3]);
+		/* an ordinary message with a name is not */
+		{
+			static unsigned short msg[10];  /* struct Message */
+			*(u32 *)(msg + 5) = (u32)"named";       /* ln_Name */
+			msg[9] = 20;                            /* mn_Length */
+			call(SysBase, LVOPutMsg, "a0a1", port, msg);
+			printf("named message: queued %ld\n",
+			       call(SysBase, LVOGetMsg, "a0", port) == (u32)msg);
+		}
 		return 0;
 	}
 	return 10;

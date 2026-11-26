@@ -1,0 +1,6 @@
+filesystem: same packet 1, res1 -1
+console: res1 0
+unknown: res1 0 res2 209
+PutMsg packet: same 1, res1 0
+named message: queued 1
+rc=0

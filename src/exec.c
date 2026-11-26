@@ -796,6 +796,19 @@ static void e_ReplyMsg(struct frame *f)
 		msg_sent(PTR(port));
 }
 
+static void e_WaitPort(struct frame *f);
+
+/* WaitPort() and GetMsg(), for dos's WaitPkt() */
+struct Message *exec_wait_msg(struct MsgPort *p)
+{
+	struct frame g;
+
+	memset(&g, 0, sizeof(g));
+	g.a[0] = APTR_OF(p);
+	e_WaitPort(&g);
+	return (struct Message *)exec_getmsg(p);
+}
+
 static void e_WaitPort(struct frame *f)
 {
 	struct MsgPort *p = PTR(A(0));

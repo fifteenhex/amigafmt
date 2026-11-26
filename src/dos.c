@@ -1542,6 +1542,39 @@ APTR dos_packet_msg(APTR port, struct Message *m)
 
 APTR dos_fs_port(void) { return APTR_OF(fs_port); }
 
+/* SendPkt, WaitPkt, ReplyPkt: packets as messages (dp_Link) */
+static void d_SendPkt(struct frame *f)
+{
+	int32_t *dp = PTR(D(1));
+	struct Message *m = PTR(dp[0]);
+
+	m->mn_Node.ln_Name = D(1);
+	dp[1] = D(3);                           /* dp_Port: the reply port */
+	if (dos_handler_port(D(2)))
+		dos_packet_msg(D(2), m);
+	else
+		exec_putmsg(PTR(D(2)), m);
+}
+
+static void d_WaitPkt(struct frame *f)
+{
+	extern struct Message *exec_wait_msg(struct MsgPort *p);
+	struct Message *m = exec_wait_msg(&me->pr_MsgPort);
+
+	RET(m ? m->mn_Node.ln_Name : 0);
+}
+
+static void d_ReplyPkt(struct frame *f)
+{
+	int32_t *dp = PTR(D(1));
+	APTR to = dp[1];
+
+	dp[3] = D(2);
+	dp[4] = D(3);
+	dp[1] = APTR_OF(&me->pr_MsgPort);
+	exec_putmsg(PTR(to), PTR(dp[0]));
+}
+
 /* SetMode(fh, 1): a raw console, as termios non-canonical, no echo */
 static struct termios saved_tio;
 static int tio_saved = -1;
@@ -1594,6 +1627,7 @@ static void d_DosGetString(struct frame *f)
 }
 
 static void d_Zero(struct frame *f) { RET(0); }
+static void d_Nop0(struct frame *f) { (void)f; }
 static void d_True(struct frame *f) { RET(DOSTRUE); }
 
 static void d_NotImpl(struct frame *f)
@@ -1819,6 +1853,8 @@ const struct libimpl dos_impl_io[] = {
 	{ "MatchPatternNoCase", d_MatchPatternNoCase },
 	{ "IsFileSystem", d_True },
 	{ "StartNotify", d_NotImpl }, { "EndNotify", d_Zero },
+	{ "SendPkt", d_SendPkt }, { "WaitPkt", d_WaitPkt },
+	{ "ReplyPkt", d_ReplyPkt }, { "AbortPkt", d_Nop0 },
 	{ "AddBuffers", d_NotImpl }, { "Inhibit", d_NotImpl },
 	{ "Relabel", d_NotImpl }, { "Format", d_NotImpl },
 	{ NULL, NULL }
