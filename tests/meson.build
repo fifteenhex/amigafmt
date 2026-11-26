@@ -17,6 +17,9 @@ foreach p : ['targs', 'tfmt', 'tfiles', 'texec', 'tunimpl', 'tpat', 'tmath',
                              command: [mkprog, cc_cmd, mkhunk, '@OUTPUT@', '@INPUT@'])}
 endforeach
 
+# a script for the shell test, next to the programs
+configure_file(input: 'script1', output: 'script1', copy: true)
+
 # case name, expected exit code, amigafmt options, program, arguments
 cases = [
   ['hello', '0', [], 'hello', []],
@@ -40,6 +43,24 @@ cases = [
   ['socket', '0', [], 'tsock', []],
   ['machine', '0', [], 'tmachine', []],
   ['machine-sysfs', '0', [], 'tmachine', []],
+  # the shell: amigafmt -c lines, scripts, the shell's own commands
+  ['shell', '3', ['-c', 'Echo "hello world"', '-c', 'Set x b', '-c', 'Echo $x ${x}c *$x $nonesuch ; a comment',
+                  '-c', 'Alias say Echo said [] !', '-c', 'say it', '-c', 'Echo `Echo inner` outer',
+                  '-c', 'FailAt', '-c', 'FailAt 11', '-c', 'targs',
+                  '-c', 'If ERROR', '-c', 'If WARN', '-c', 'Echo nested', '-c', 'Else', '-c', 'Echo bad',
+                  '-c', 'EndIf', '-c', 'Else', '-c', 'Echo bad', '-c', 'EndIf', '-c', 'Echo RC=$RC',
+                  '-c', 'If $x EQ B', '-c', 'Echo equal', '-c', 'EndIf', '-c', 'If 10 GT 9 VAL', '-c', 'Echo greater', '-c', 'EndIf',
+                  '-c', 'Skip over', '-c', 'Echo bad', '-c', 'Lab over', '-c', 'Fault 205 103', '-c', 'Stack 9000', '-c', 'Stack',
+                  '-c', 'Echo >af-shell.tmp redirected', '-c', 'Echo >>af-shell.tmp appended',
+                  '-c', 'tcli <af-shell.tmp cat', '-c', 'targs a TO b',
+                  '-c', 'tcli exit 4', '-c', 'Echo Exit gave $RC', '-c', 'tcli internal', '-c', 'Resident hello',
+                  '-c', 'Resident tcli tcli', '-c', 'Resident REMOVE tcli',
+                  '-c', 'Quit 3', '-c', 'Echo bad'], '', []],
+  ['shell-script', '0', ['-c', 'Echo before', '-c', 'tcli script script1', '-c', 'Echo lost: the script replaced the input'], '', []],
+  # CD in a nested shell, in the board directory made for machine-sysfs
+  ['shell-cd', '0', ['-c', 'CD zorro', '-c', '/tcli cd', '-c', '/tcli cd', '-c', '/tcli cd'], '', []],
+  ['shell-tmpdir', '20', ['-c', 'Echo bad'], '', []],
+  ['shell-fail', '10', ['-c', 'Echo one', '-c', 'targs', '-c', 'Echo bad'], '', []],
   ['vars', '0', ['-a', 'ENV=T:'], 'tcli', ['vars']],
 ]
 here = meson.current_build_dir()
@@ -50,14 +71,16 @@ run_command(find_program('mkzorro.py'), here / 'zorro', check: true)
 case_env = {
   'files': {'AMIGAFMT_CONF': '/dev/null'},
   'machine-sysfs': {'AMIGAFMT_ZORRO': here / 'zorro'},
+  'shell-tmpdir': {'TMPDIR': '/nonexistent-afshell'},
   'machine': {'AMIGAFMT_ZORRO': '5080/148@0xe90000/0x10000,2206/33@0x40000000/0x1000000,2206/0xa1@0x60000000/0x20000000'},
 }
 foreach c : cases
   name = c[0]
   prog = c[3]
   test(name, check,
-       args: [files('expected' / name + '.out'), c[1], here, amigafmt.full_path()] + c[2] + ['./' + prog] + c[4],
+       args: [files('expected' / name + '.out'), c[1], here, amigafmt.full_path()] + c[2] +
+             (prog != '' ? ['./' + prog] : []) + c[4],
        env: case_env.get(name, {}),
-       depends: progs.has_key(prog) ? [amigafmt, progs[prog]] : [amigafmt],
+       depends: prog == '' ? [amigafmt] + progs.values() : [amigafmt] + progs.get(prog, []),
        suite: 'programs')
 endforeach

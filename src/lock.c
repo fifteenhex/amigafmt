@@ -116,7 +116,7 @@ BPTR lock_new(const char *lpath, int32_t mode)
 	return MKBADDR(l);
 }
 
-static void lock_free(BPTR b)
+void lock_free(BPTR b)
 {
 	struct alock *l = AL(b);
 

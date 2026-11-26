@@ -9,6 +9,7 @@
  * and the buffers behind FGetC/FPutC/FPuts/VFPrintf.
  */
 #include <errno.h>
+#include <setjmp.h>
 #include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
@@ -118,7 +119,7 @@ static const struct { int16_t code; const char *msg; } faults[] = {
 	{ 305, "file not executable" },
 };
 
-static int fault_text(int32_t code, const char *hdr, char *buf, int32_t len)
+int dos_fault_text(int32_t code, const char *hdr, char *buf, int32_t len)
 {
 	const char *m = NULL;
 	char tmp[300], num[32];
@@ -378,7 +379,7 @@ int32_t fh_read(struct afh *a, void *buf, int32_t len)
 	return done;
 }
 
-static void fh_close(BPTR b)
+void dos_close(BPTR b)
 {
 	struct afh *a = fh_priv(b);
 	int i;
@@ -480,7 +481,7 @@ static void d_Close(struct frame *f)
 		RET(DOSTRUE);
 		return;
 	}
-	fh_close(D(1));
+	dos_close(D(1));
 	RET(DOSTRUE);
 }
 
@@ -863,7 +864,7 @@ static void d_SetIoErr(struct frame *f)
 
 static void d_Fault(struct frame *f)
 {
-	RET(fault_text(D(1), PTR(D(2)), PTR(D(3)), D(4)));
+	RET(dos_fault_text(D(1), PTR(D(2)), PTR(D(3)), D(4)));
 }
 
 static void d_PrintFault(struct frame *f)
@@ -873,7 +874,7 @@ static void d_PrintFault(struct frame *f)
 	int32_t code = D(1);
 
 	if (code && a) {
-		fault_text(code, PTR(D(2)), buf, sizeof(buf));
+		dos_fault_text(code, PTR(D(2)), buf, sizeof(buf));
 		for (char *s = buf; *s; s++)
 			fh_putc(a, *s);
 		fh_putc(a, '\n');
@@ -885,9 +886,28 @@ static void d_PrintFault(struct frame *f)
 
 /* ---- process ---- */
 
+/* the RunCommand()s in progress, for Exit() to come back to; tasks
+   interleave on the one list */
+struct runlevel {
+	jmp_buf jb;
+	int32_t rc;
+	uint32_t native_sp;
+	struct frame *resume_frame;
+	int in_supervisor;
+	APTR task;                      /* the task that ran it */
+	struct runlevel *outer;
+};
+static struct runlevel *runlevel;
+
 void dos_exit(int32_t code)
 {
 	dos_flush_all();
+	/* a command the shell runs: this task's innermost RunCommand() */
+	for (struct runlevel *l = runlevel; l; l = l->outer)
+		if (l->task == SysBase->ThisTask) {
+			l->rc = code;
+			longjmp(l->jb, 1);
+		}
 	exit(code < 0 || code > 255 ? 255 : code);
 }
 
@@ -960,6 +980,8 @@ static struct CommandLineInterface *cli(void)
 	return me->pr_CLI ? BADDR(me->pr_CLI) : hidden_cli;
 }
 
+struct CommandLineInterface *dos_cli(void) { return cli(); }
+
 static void d_GetProgramName(struct frame *f)
 {
 	if (!bstr_get(cli()->cli_CommandName, PTR(D(1)), D(2))) {
@@ -1021,167 +1043,10 @@ static void d_GetConsoleTask(struct frame *f) { RET(con_port); }
 static void d_GetFileSysTask(struct frame *f) { RET(fs_port); }
 static void d_SetTask(struct frame *f) { RET(fs_port); }
 
-/*
- * System() and Execute(): no shell, but a command line naming an AmigaOS
- * program is run in this process, the way the shell would: the first
- * word is the command (a path, or looked up in the current directory,
- * then C:), then AmigaDOS redirections (<file, >file, >>file), the rest
- * is its argument line.  A command that is not an AmigaOS executable is
- * handed to the Linux shell (/bin/sh -c), so `System("echo hi")` works.
- */
-static void d_RunCommand(struct frame *f);
-static int bstr_get(BPTR b, char *buf, int32_t len);
-static int bstr_set(BPTR b, const char *s, int max);
-
-static const char *FilePart_c(const char *p)
-{
-	const char *s = strrchr(p, '/');
-
-	if (!s)
-		s = strrchr(p, ':');
-	return s ? s + 1 : p;
-}
-
-static int32_t run_line(struct frame *f, const char *line, BPTR in, BPTR out)
-{
-	char cmd[256], *args, *lp = NULL, *redir_in = NULL, *redir_out = NULL;
-	const char *p = line;
-	int append = 0, err, n = 0;
-	BPTR seg = 0, oin = me->pr_CIS, oout = me->pr_COS, fin = 0, fout = 0;
-	BPTR odir = me->pr_CurrentDir;
-	struct CommandLineInterface *c = cli();
-	char oldname[256];
-	int32_t rc;
-
-	while (*p == ' ' || *p == '\t')
-		p++;
-	if (*p == '"') {
-		for (p++; *p && *p != '"' && n < 255; p++)
-			cmd[n++] = *p;
-		if (*p == '"')
-			p++;
-	} else
-		while (*p && *p != ' ' && *p != '\t' && *p != '\n' && n < 255)
-			cmd[n++] = *p++;
-	cmd[n] = 0;
-	if (!n)
-		return 0;
-	/* redirections, which come right after the command */
-	args = malloc(strlen(p) + 2);
-	args[0] = 0;
-	for (;;) {
-		char tok[256];
-		int k = 0, isin, isout;
-		while (*p == ' ' || *p == '\t')
-			p++;
-		isin = *p == '<';
-		isout = *p == '>';
-		if (!isin && !isout)
-			break;
-		p++;
-		if (isout && *p == '>')
-			append = 1, p++;
-		while (*p == ' ')
-			p++;
-		while (*p && *p != ' ' && *p != '\t' && *p != '\n' && k < 255)
-			tok[k++] = *p++;
-		tok[k] = 0;
-		if (isin)
-			redir_in = strdup(tok);
-		else
-			redir_out = strdup(tok);
-	}
-	sprintf(args, "%s", p);
-	n = strlen(args);
-	while (n && (args[n - 1] == '\n' || args[n - 1] == ' '))
-		args[--n] = 0;
-	strcat(args, "\n");
-
-	if (strchr(cmd, ':') || strchr(cmd, '/'))
-		lp = path_to_linux(cmd, NULL);
-	else {
-		char a[300];
-		struct stat st;
-		lp = path_to_linux(cmd, NULL);
-		if (!lp || stat(lp, &st) || !S_ISREG(st.st_mode)) {
-			free(lp);
-			snprintf(a, sizeof(a), "C:%s", cmd);
-			lp = path_to_linux(a, NULL);
-		}
-	}
-	if (lp)
-		seg = hunk_load(lp, &err);
-	free(lp);
-	if (!seg) {
-		/* not an AmigaOS program: the Linux shell */
-		char *sh = malloc(strlen(line) + 1);
-		dos_flush_all();
-		strcpy(sh, line);
-		n = strlen(sh);
-		while (n && sh[n - 1] == '\n')
-			sh[--n] = 0;
-		rc = system(sh);
-		free(sh);
-		free(args);
-		free(redir_in);
-		free(redir_out);
-		if (rc < 0 || !WIFEXITED(rc))
-			return -1;
-		rc = WEXITSTATUS(rc);
-		return rc == 127 ? -1 : rc;
-	}
-	if (redir_in && !(fin = dos_open(redir_in, MODE_OLDFILE))) {
-		rc = -1;
-		goto out;
-	}
-	if (redir_out && !(fout = dos_open(redir_out, append ?
-					    MODE_READWRITE : MODE_NEWFILE))) {
-		rc = -1;
-		goto out;
-	}
-	if (fout && append) {
-		struct afh *a = fh_priv(fout);
-		lseek(a->wfd, 0, SEEK_END);
-	}
-	me->pr_CIS = fin ? fin : in ? in : oin;
-	me->pr_COS = fout ? fout : out ? out : oout;
-	bstr_get(c->cli_CommandName, oldname, sizeof(oldname));
-	bstr_set(c->cli_CommandName, FilePart_c(cmd), 255);
-	{
-		struct frame g = *f;
-		char *amargs = amem_alloc(strlen(args) + 1);
-		strcpy(amargs, args);
-		g.d[1] = seg;
-		g.d[2] = me->pr_StackSize;
-		g.d[3] = APTR_OF(amargs);
-		g.d[4] = strlen(amargs);
-		d_RunCommand(&g);
-		rc = g.d[0];
-		amem_free(amargs);
-	}
-	bstr_set(c->cli_CommandName, oldname, 255);
-	dos_flush_all();
-	if (me->pr_CurrentDir != odir) {        /* the child's cd is its own */
-		me->pr_CurrentDir = odir;
-		path_set_cwd(lock_path(odir));
-	}
-out:
-	me->pr_CIS = oin;
-	me->pr_COS = oout;
-	if (fin)
-		fh_close(fin);
-	if (fout)
-		fh_close(fout);
-	hunk_unload(seg);
-	free(args);
-	free(redir_in);
-	free(redir_out);
-	return rc;
-}
-
+/* System() and Execute(): the shell (shell.c) */
 static void d_Execute(struct frame *f)
 {
-	int32_t rc = run_line(f, PTR(D(1)), D(2), D(3));
+	int32_t rc = shell_system(PTR(D(1)) ? PTR(D(1)) : "", D(2), D(3), 1);
 
 	RET(rc < 0 ? DOSFALSE : DOSTRUE);
 }
@@ -1208,7 +1073,7 @@ static void d_SystemTagList(struct frame *f)
 		else if (t->ti_Tag == SYS_Output)
 			out = t->ti_Data;
 	}
-	RET(run_line(f, PTR(D(1)), in, out));
+	RET(shell_system(PTR(D(1)), in, out, 0));
 }
 
 static void d_CheckSignal(struct frame *f)
@@ -1246,35 +1111,92 @@ static void d_UnLoadSeg(struct frame *f)
 	RET(DOSTRUE);
 }
 
-static void d_RunCommand(struct frame *f)
+/*
+ * RunCommand: the program on a stack of its own, with its arguments in
+ * a0/d0 and in Input()'s buffer.  Exit() inside it comes back here.
+ */
+
+int32_t dos_runcommand(BPTR seg, uint32_t stack, const char *args,
+		       uint32_t len)
 {
-	BPTR seg = D(1);
-	uint32_t stack = D(2) < 8192 ? 8192 : D(2);
-	uint8_t *st = amem_alloc(stack + 16);
-	uint32_t *sp = (uint32_t *)(st + stack);
+	uint8_t *st;
+	uint32_t *sp;
 	struct regs r;
 	APTR oldargs = me->pr_Arguments;
-	uint32_t res;
+	char *amargs;
+	struct runlevel lv;
+	volatile int32_t res;
+	struct afh *ain;
+	char *volatile keep = NULL;
+	volatile int keep_len = 0, keep_unget;
 
-	if (!seg || !st) {
-		RET(-1);
-		return;
+	if (stack < 8192)
+		stack = 8192;
+	st = amem_alloc(stack + 16);
+	amargs = amem_alloc(len + 1);
+	if (!seg || !st || !amargs) {
+		amem_free(st);
+		amem_free(amargs);
+		return -1;
 	}
+	memcpy(amargs, args, len);
+	amargs[len] = 0;
+	sp = (uint32_t *)(st + stack);
 	memset(&r, 0, sizeof(r));
 	*--sp = stack;
 	r.a[7] = APTR_OF(sp);
-	r.d[0] = D(4);
-	r.a[0] = D(3);
+	r.d[0] = len;
+	r.a[0] = APTR_OF(amargs);
 	r.a[6] = APTR_OF(SysBase);
-	me->pr_Arguments = D(3);
-	dos_preload_args(PTR(D(3)), D(4));
-	res = call_amiga(&r, APTR_OF((uint32_t *)BADDR(seg) + 1));
+	me->pr_Arguments = APTR_OF(amargs);
+	/* what is buffered on Input() is the shell's: kept aside while the
+	   argument line takes its place, and put back afterwards */
+	ain = fh_priv(me->pr_CIS);
+	if (ain && ain->rpos < ain->rlen) {
+		keep_len = ain->rlen - ain->rpos;
+		keep = malloc(keep_len);
+		memcpy(keep, ain->rbuf + ain->rpos, keep_len);
+	}
+	keep_unget = ain ? ain->unget : -1;
+	dos_preload_args(amargs, len);
+	lv.native_sp = native_sp;
+	lv.resume_frame = resume_frame;
+	lv.in_supervisor = in_supervisor;
+	lv.task = SysBase->ThisTask;
+	lv.outer = runlevel;
+	runlevel = &lv;
+	if (!setjmp(lv.jb))
+		res = call_amiga(&r, APTR_OF((uint32_t *)BADDR(seg) + 1));
+	else {                                  /* Exit() */
+		native_sp = lv.native_sp;
+		resume_frame = lv.resume_frame;
+		in_supervisor = lv.in_supervisor;
+		res = lv.rc;
+	}
+	/* off the list, wherever other tasks' levels have left it */
+	for (struct runlevel **p = &runlevel; *p; p = &(*p)->outer)
+		if (*p == &lv) {
+			*p = lv.outer;
+			break;
+		}
+	if (ain && fh_priv(me->pr_CIS) == ain) {
+		ain->rpos = 0;
+		ain->rlen = keep_len;
+		if (keep_len)
+			memcpy(ain->rbuf, keep, keep_len);
+		ain->unget = keep_unget;
+	}
+	free(keep);
 	me->pr_Arguments = oldargs;
 	amem_free(st);
-	RET(res);
+	amem_free(amargs);
+	return res;
 }
 
-static void d_FindSegment(struct frame *f) { RET(0); }
+static void d_RunCommand(struct frame *f)
+{
+	RET(dos_runcommand(D(1), D(2), PTR(D(3)), D(4)));
+}
 
 /* ---- DOS objects ---- */
 
@@ -1553,7 +1475,7 @@ static void d_DosGetString(struct frame *f)
 {
 	static char buf[128];
 
-	fault_text(D(1), NULL, buf, sizeof(buf));
+	dos_fault_text(D(1), NULL, buf, sizeof(buf));
 	RET(buf);
 }
 
@@ -1752,7 +1674,6 @@ const struct libimpl dos_impl_io[] = {
 	{ "DosGetString", d_DosGetString },
 	{ "LockRecord", d_True }, { "LockRecords", d_True },
 	{ "UnLockRecord", d_True }, { "UnLockRecords", d_True },
-	{ "AddSegment", d_Zero }, { "RemSegment", d_Zero },
 	{ "Exit", d_Exit }, { "Delay", d_Delay }, { "DateStamp", d_DateStamp },
 	{ "Cli", d_Cli }, { "GetArgStr", d_GetArgStr },
 	{ "SetArgStr", d_SetArgStr },
@@ -1771,7 +1692,6 @@ const struct libimpl dos_impl_io[] = {
 	{ "CheckSignal", d_CheckSignal },
 	{ "LoadSeg", d_LoadSeg }, { "NewLoadSeg", d_LoadSeg },
 	{ "UnLoadSeg", d_UnLoadSeg }, { "RunCommand", d_RunCommand },
-	{ "FindSegment", d_FindSegment },
 	{ "AllocDosObject", d_AllocDosObject },
 	{ "FreeDosObject", d_FreeDosObject },
 	{ "FilePart", d_FilePart }, { "PathPart", d_PathPart },
@@ -1804,6 +1724,15 @@ static BPTR bstr_new(const char *s, int room)
 	return MKBADDR(b);
 }
 
+static uint32_t *dosinfo;
+
+/* DosInfo's di_ResList: the head of the resident list (shell.c) */
+void dos_set_reslist(BPTR head)
+{
+	if (dosinfo)
+		dosinfo[0] = head;
+}
+
 static void dos_setup(struct Library *b)
 {
 	struct DosLibrary *d = (struct DosLibrary *)b;
@@ -1811,6 +1740,8 @@ static void dos_setup(struct Library *b)
 
 	DOSBase = d;
 	d->dl_Root = APTR_OF(rn);
+	dosinfo = amem_alloc(160);              /* struct DosInfo */
+	rn->rn_Info = MKBADDR(dosinfo);
 	date_now(&rn->rn_Time);
 	exec_newlist(&rn->rn_CliList);
 	d->dl_UtilityBase = APTR_OF(lib_build(&lib_utility));
@@ -1823,7 +1754,8 @@ static void dos_setup(struct Library *b)
 	exec_newlist(&con_port->mp_MsgList);
 }
 
-extern const struct libimpl dos_impl_lock[], dos_impl_date[], dos_impl_var[];
+extern const struct libimpl dos_impl_lock[], dos_impl_date[], dos_impl_var[],
+	dos_impl_shell[];
 static struct libimpl dos_impl[256];
 
 struct amilib lib_dos = {
@@ -1844,6 +1776,8 @@ __attribute__((constructor)) static void dos_merge_impl(void)
 	for (const struct libimpl *i = dos_impl_date; i->name; i++)
 		dos_impl[n++] = *i;
 	for (const struct libimpl *i = dos_impl_var; i->name; i++)
+		dos_impl[n++] = *i;
+	for (const struct libimpl *i = dos_impl_shell; i->name; i++)
 		dos_impl[n++] = *i;
 }
 

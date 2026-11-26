@@ -1,6 +1,22 @@
-/* dos.library tests:
-     tcli vars           GetVar/SetVar, local and global */
+/* helpers for the shell tests:
+     tcli cat            copy Input() to Output()
+     tcli script <file>  make <file> the CLI's current input, as C:Execute
+                         does, so the shell runs it when this returns
+     tcli exit <n>       Exit(n) from inside a nested function
+     tcli internal       run the shell's Echo through FindSegment/RunCommand
+     tcli vars           GetVar/SetVar, local and global
+     tcli cd             CD through System(), in a directory with "boards"
+                         and "devices" (the machine-sysfs board directory) */
 #include "t.h"
+
+struct CLI {
+	s32 result2;
+	u32 setname, commanddir;
+	s32 returncode;
+	u32 commandname;
+	s32 faillevel;
+	u32 prompt, standardinput, currentinput, commandfile;
+};
 
 static int word(const char **p, char *w, int max)
 {
@@ -14,6 +30,22 @@ static int word(const char **p, char *w, int max)
 	return n;
 }
 
+static void deep(int n, s32 code)
+{
+	if (n)
+		deep(n - 1, code);
+	else
+		call(DOSBase, LVOExit, "d1", code);
+}
+
+static s32 num(const char *s)
+{
+	s32 v = 0;
+	while (*s >= '0' && *s <= '9')
+		v = v * 10 + *s++ - '0';
+	return v;
+}
+
 int main(u32 arglen, char *args)
 {
 	const char *p = args;
@@ -21,6 +53,52 @@ int main(u32 arglen, char *args)
 
 	word(&p, cmd, sizeof(cmd));
 	word(&p, arg, sizeof(arg));
+	if (!strcmp(cmd, "cat")) {
+		u32 in = call(DOSBase, LVOInput, ""), out = call(DOSBase, LVOOutput, "");
+		s32 c;
+		/* the argument line comes first, as on AmigaOS */
+		while ((c = call(DOSBase, LVOFGetC, "d1", in)) >= 0 && c != '\n')
+			;
+		while ((c = call(DOSBase, LVOFGetC, "d1", in)) >= 0)
+			call(DOSBase, LVOFPutC, "d1d2", out, c);
+		return 0;
+	}
+	if (!strcmp(cmd, "script")) {
+		struct CLI *cli = (struct CLI *)(call(DOSBase, LVOCli, "") );
+		u32 fh = call(DOSBase, LVOOpen, "d1d2", arg, 1005);
+		if (!fh)
+			return 20;
+		cli->currentinput = fh;
+		return 0;
+	}
+	if (!strcmp(cmd, "cd")) {
+		/* System("CD") changes the nested shell's directory, not ours,
+		   and leaves our locks alone */
+		s32 r = call(DOSBase, LVOSystemTagList, "d1d2", "CD boards", 0);
+		u32 l = call(DOSBase, LVOLock, "d1d2", "devices", -2);
+		u32 mine = call(DOSBase, LVOLock, "d1d2", "", -2), old, back;
+		printf("System CD %ld, still here %ld\n", r, l != 0);
+		call(DOSBase, LVOUnLock, "d1", l);
+		old = call(DOSBase, LVOCurrentDir, "d1", mine);
+		call(DOSBase, LVOSystemTagList, "d1d2", "CD boards", 0);
+		back = call(DOSBase, LVOCurrentDir, "d1", old);
+		printf("own lock kept %ld\n", back == mine);
+		call(DOSBase, LVOUnLock, "d1", mine);
+		return 0;
+	}
+	if (!strcmp(cmd, "exit")) {
+		deep(5, num(arg));
+		printf("not reached\n");
+		return 0;
+	}
+	if (!strcmp(cmd, "internal")) {
+		u32 *seg = (u32 *)call(DOSBase, LVOFindSegment, "d1d2d3", "Echo", 0, 1);
+		if (!seg)
+			return 20;
+		printf("Echo: usecount %ld\n", (s32)seg[1]);
+		return call(DOSBase, LVORunCommand, "d1d2d3d4", seg[2], 8192,
+			    "from RunCommand\n", 16);
+	}
 	if (!strcmp(cmd, "vars")) {
 		char buf[64];
 		s32 n;

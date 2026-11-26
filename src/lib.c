@@ -28,7 +28,7 @@ struct amilib *all_libs[] = { &lib_exec, &lib_dos, &lib_utility,
 			      &lib_iffparse, &lib_boopsi, &lib_workbench,
 			      &lib_datatypes, &lib_diskfont, &lib_locale,
 			      &lib_keymap, &lib_input, &lib_bsdsocket,
-			      &lib_expansion, NULL };
+			      &lib_expansion, &lib_shellcmd, NULL };
 struct frame *resume_frame;
 int dispatch_all_regs;
 

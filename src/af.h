@@ -177,6 +177,12 @@ void dos_exit(int32_t code);
 extern char *dos_args;
 extern uint32_t dos_arglen;
 void dos_preload_args(const char *s, uint32_t len);
+
+/* the shell */
+void shell_init(void);
+int32_t shell_main(const char *text);
+int32_t shell_after(int32_t rc);
+extern struct amilib lib_shellcmd;
 int dos_take_args(const char **s, int32_t *len);
 
 /* RawDoFmt engine shared by exec and dos */

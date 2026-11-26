@@ -541,7 +541,9 @@ static void usage(void)
 {
 	fprintf(stderr,
 		"usage: amigafmt [options] program [arguments...]\n"
+		"       amigafmt [options] -c command-line [-c command-line...]\n"
 		"  -a NAME=PATH  assign NAME: to a Linux directory or Amiga path\n"
+		"  -c LINE       run LINE through the AmigaOS shell (repeatable)\n"
 		"  -s BYTES      stack size (default 262144)\n"
 		"  -t            trace every library call to stderr\n"
 		"  -u            a leading / is the Linux root, not the parent\n"
@@ -563,10 +565,17 @@ int main(int argc, char **argv)
 	uint8_t *st;
 	uint32_t rc;
 	stack_t ss;
+	char *shell = NULL;
 
 	af_trace = getenv("AMIGAFMT_TRACE") != NULL;
-	while ((c = getopt(argc, argv, "+a:s:tunlh")) != -1) {
+	while ((c = getopt(argc, argv, "+a:c:s:tunlh")) != -1) {
 		switch (c) {
+		case 'c': {
+			size_t n = shell ? strlen(shell) : 0;
+			shell = realloc(shell, n + strlen(optarg) + 2);
+			sprintf(shell + n, "%s\n", optarg);
+			break;
+		}
 		case 'a':
 			if (nap < 64)
 				ap[nap++] = optarg;
@@ -590,9 +599,9 @@ int main(int argc, char **argv)
 			usage();
 		}
 	}
-	if (optind >= argc && !list)
+	if (optind >= argc && !list && !shell)
 		usage();
-	prog = list ? NULL : argv[optind];
+	prog = list ? NULL : shell ? "Shell" : argv[optind];
 	path_init(prog);
 	for (c = 0; c < nap; c++) {
 		char *eq = strchr(ap[c], '=');
@@ -614,8 +623,9 @@ int main(int argc, char **argv)
 		stack = (strtoul(getenv("WBDE_STACK"), NULL, 0) + 3) & ~3u;
 
 	/* a Linux path is what the shell gave us; fall back to Amiga names */
-	lp = access(prog, R_OK) ? path_to_linux(prog, NULL) : strdup(prog);
-	if (!lp || !(the_seg = hunk_load(lp, &err))) {
+	lp = shell ? NULL : access(prog, R_OK) ? path_to_linux(prog, NULL) :
+	     strdup(prog);
+	if (!shell && (!lp || !(the_seg = hunk_load(lp, &err)))) {
 		fprintf(stderr, "amigafmt: %s: cannot load (%s)\n", prog,
 			lp && !access(lp, R_OK) ? "not an AmigaOS executable" :
 			strerror(errno));
@@ -629,7 +639,9 @@ int main(int argc, char **argv)
 		fprintf(stderr, "amigafmt: ExecBase at $%08x, address 4 %s\n",
 			APTR_OF(SysBase), page0 ? "mapped (page 0)" :
 			"emulated (SIGSEGV)");
-	dos_init(argc - optind - 1, argv + optind + 1, prog, the_seg, stack);
+	dos_init(shell ? 0 : argc - optind - 1, argv + optind + 1, prog,
+		 the_seg, stack);
+	shell_init();
 	{
 		extern void task_init(void);
 		task_init();
@@ -657,6 +669,11 @@ int main(int argc, char **argv)
 		setitimer(ITIMER_REAL, &it, NULL);
 	}
 
+	if (shell) {
+		rc = shell_main(shell);
+		dos_flush_all();
+		return (int32_t)rc < 0 || rc > 255 ? 255 : (int)rc;
+	}
 	st = amem_alloc(stack + 64);
 	stack_lo = APTR_OF(st);
 	stack_hi = stack_lo + stack;
@@ -671,6 +688,7 @@ int main(int argc, char **argv)
 	r.a[0] = APTR_OF(dos_args);
 	r.a[6] = APTR_OF(SysBase);
 	rc = call_amiga(&r, APTR_OF((uint32_t *)BADDR(the_seg) + 1));
+	rc = shell_after(rc);           /* a script it started (C:Execute) */
 	dos_flush_all();
 	if (af_trace)
 		fprintf(stderr, "amigafmt: %s returned %d\n", af_progname,

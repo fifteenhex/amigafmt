@@ -33,7 +33,7 @@ threads = dependency('threads')
 srcs = files(
   'src/main.c', 'src/lib.c', 'src/hunk.c', 'src/amem.c', 'src/path.c',
   'src/exec.c', 'src/fmt.c', 'src/dos.c', 'src/lock.c', 'src/readargs.c',
-  'src/pattern.c', 'src/date.c', 'src/var.c', 'src/utility.c', 'src/intuition.c',
+  'src/pattern.c', 'src/date.c', 'src/var.c', 'src/shell.c', 'src/utility.c', 'src/intuition.c',
   'src/gfx.c', 'src/gui.c', 'src/gadtools.c', 'src/icon.c', 'src/console.c',
   'src/iffparse.c', 'src/boopsi.c', 'src/asl.c', 'src/math.c', 'src/timer.c',
   'src/diskfont.c', 'src/ramlib.c', 'src/locale.c', 'src/task.c',
