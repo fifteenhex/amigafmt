@@ -430,10 +430,16 @@ static int is_topaz(const char *n)
 /* a font in memory (topaz from wbde, or one diskfont loaded), else NULL */
 static struct TextFont *font_in_memory(struct TextAttr *ta)
 {
+	static int warned;
+
 	if (!gui_topaz)
 		gui_connect();
-	if (!ta || !ta->ta_Name || is_topaz(PTR(ta->ta_Name)))
+	if (!ta || !ta->ta_Name || is_topaz(PTR(ta->ta_Name))) {
+		if (!gui_topaz && !warned++)
+			af_warn("%s: no wbde to give the topaz font (WBDE_SOCKET)",
+				af_progname);
 		return gui_topaz;
+	}
 	return diskfont_find(PTR(ta->ta_Name), ta->ta_YSize, 0);
 }
 

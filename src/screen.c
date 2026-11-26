@@ -1448,6 +1448,10 @@ static void i_LockPubScreen(struct frame *f)
 		return;
 	}
 	if (gui_connect()) {
+		static int warned;
+		if (!warned++)
+			af_warn("%s: no wbde for the Workbench screen "
+				"(WBDE_SOCKET)", af_progname);
 		RET(0);
 		return;
 	}
