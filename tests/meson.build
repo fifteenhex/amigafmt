@@ -12,7 +12,7 @@ foreach p : ['hello', 'abs4', 'crash']
                              command: [mkprog, cc_cmd, mkhunk, '@OUTPUT@', '@INPUT@'])}
 endforeach
 foreach p : ['targs', 'tfmt', 'tfiles', 'texec', 'tunimpl', 'tpat', 'tmath',
-             'ttimer', 'tsystem', 'tscreen', 'tasl', 'tsock', 'tmachine']
+             'ttimer', 'tsystem', 'tscreen', 'tasl', 'tsock', 'tmachine', 'tcli']
   progs += {p: custom_target(p, input: ['start.S', 'lib.c', p + '.c'], output: p, build_by_default: true,
                              command: [mkprog, cc_cmd, mkhunk, '@OUTPUT@', '@INPUT@'])}
 endforeach
@@ -40,6 +40,7 @@ cases = [
   ['socket', '0', [], 'tsock', []],
   ['machine', '0', [], 'tmachine', []],
   ['machine-sysfs', '0', [], 'tmachine', []],
+  ['vars', '0', ['-a', 'ENV=T:'], 'tcli', ['vars']],
 ]
 here = meson.current_build_dir()
 # a board directory with the layout of /sys/bus/zorro, for machine-sysfs

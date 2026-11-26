@@ -1452,73 +1452,6 @@ static void d_StrToLong(struct frame *f)
 	RET(p - s);
 }
 
-/* ---- variables: local and global both map onto the environment ---- */
-
-static void d_GetVar(struct frame *f)
-{
-	const char *v = getenv(PTR(D(1)));
-	char *buf = PTR(D(2));
-	int32_t size = D(3), n;
-
-	if (!v) {
-		char *lp, path[512];
-		FILE *fp;
-		snprintf(path, sizeof(path), "ENV:%s", (char *)PTR(D(1)));
-		lp = path_to_linux(path, NULL);
-		if (lp && !(D(4) & 0x100) && (fp = fopen(lp, "r"))) {
-			n = fread(buf, 1, size > 0 ? size - 1 : 0, fp);
-			fclose(fp);
-			free(lp);
-			while (n && (buf[n - 1] == '\n'))
-				n--;
-			if (size > 0)
-				buf[n] = 0;
-			RET(n);
-			return;
-		}
-		free(lp);
-		dos_set_ioerr(ERROR_OBJECT_NOT_FOUND);
-		RET(-1);
-		return;
-	}
-	n = strlen(v);
-	if (size <= 0) {
-		RET(0);
-		return;
-	}
-	if (n >= size)
-		n = size - 1;
-	memcpy(buf, v, n);
-	buf[n] = 0;
-	RET(n);
-}
-
-static void d_SetVar(struct frame *f)
-{
-	char *val;
-	int32_t size = D(3);
-
-	if (!D(2)) {
-		unsetenv(PTR(D(1)));
-		RET(DOSTRUE);
-		return;
-	}
-	if (size < 0)
-		size = strlen(PTR(D(2)));
-	val = strndup(PTR(D(2)), size);
-	setenv(PTR(D(1)), val, 1);
-	free(val);
-	RET(DOSTRUE);
-}
-
-static void d_DeleteVar(struct frame *f)
-{
-	unsetenv(PTR(D(1)));
-	RET(DOSTRUE);
-}
-
-static void d_FindVar(struct frame *f) { RET(0); }
-
 static void d_ErrorReport(struct frame *f) { RET(DOSTRUE); }
 
 /*
@@ -1844,8 +1777,6 @@ const struct libimpl dos_impl_io[] = {
 	{ "FilePart", d_FilePart }, { "PathPart", d_PathPart },
 	{ "AddPart", d_AddPart }, { "SplitName", d_SplitName },
 	{ "StrToLong", d_StrToLong },
-	{ "GetVar", d_GetVar }, { "SetVar", d_SetVar },
-	{ "DeleteVar", d_DeleteVar }, { "FindVar", d_FindVar },
 	{ "ReadArgs", d_ReadArgs }, { "FreeArgs", d_FreeArgs },
 	{ "ReadItem", d_ReadItem }, { "FindArg", d_FindArg },
 	{ "ParsePattern", d_ParsePattern },
@@ -1892,7 +1823,7 @@ static void dos_setup(struct Library *b)
 	exec_newlist(&con_port->mp_MsgList);
 }
 
-extern const struct libimpl dos_impl_lock[], dos_impl_date[];
+extern const struct libimpl dos_impl_lock[], dos_impl_date[], dos_impl_var[];
 static struct libimpl dos_impl[256];
 
 struct amilib lib_dos = {
@@ -1911,6 +1842,8 @@ __attribute__((constructor)) static void dos_merge_impl(void)
 	for (const struct libimpl *i = dos_impl_lock; i->name; i++)
 		dos_impl[n++] = *i;
 	for (const struct libimpl *i = dos_impl_date; i->name; i++)
+		dos_impl[n++] = *i;
+	for (const struct libimpl *i = dos_impl_var; i->name; i++)
 		dos_impl[n++] = *i;
 }
 

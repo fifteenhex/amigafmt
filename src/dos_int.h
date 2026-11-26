@@ -30,7 +30,13 @@ void lock_init_process(struct Process *p, const char *prog);
 const char *lock_path(BPTR lock);
 BPTR lock_new(const char *lpath, int32_t mode);
 
-void exec_newlist(void *l);
-void exec_addtail(void *l, void *n);
+/* variables (var.c) */
+struct LocalVar;
+struct LocalVar *var_find(const char *name, int type);
+int var_set_local(const char *name, const char *val, int32_t len, int type);
+int var_delete_local(const char *name, int type);
+char *var_get_global(const char *name, int32_t *len);
+int var_set_global(const char *name, const char *val, int32_t len, int save);
+int var_delete_global(const char *name);
 
 #endif
