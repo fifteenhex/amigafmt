@@ -682,6 +682,7 @@ int main(int argc, char **argv)
 	me->pr_StackBase = MKBADDR(stack_hi);
 	sp = (uint32_t *)(st + stack);
 	*--sp = stack;                          /* 4(sp) = stack size */
+	me->pr_ReturnAddr = APTR_OF(sp);        /* where startup code unwinds to */
 	memset(&r, 0, sizeof(r));
 	r.a[7] = APTR_OF(sp);
 	r.d[0] = dos_arglen;

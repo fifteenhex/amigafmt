@@ -1127,6 +1127,7 @@ int32_t dos_runcommand(BPTR seg, uint32_t stack, const char *args,
 	struct runlevel lv;
 	volatile int32_t res;
 	struct afh *ain;
+	APTR oldret;
 	char *volatile keep = NULL;
 	volatile int keep_len = 0, keep_unget;
 
@@ -1145,6 +1146,10 @@ int32_t dos_runcommand(BPTR seg, uint32_t stack, const char *args,
 	memset(&r, 0, sizeof(r));
 	*--sp = stack;
 	r.a[7] = APTR_OF(sp);
+	/* pr_ReturnAddr: the stack size, just above the return address
+	   (startup code that leaves through it unwinds to there) */
+	oldret = me->pr_ReturnAddr;
+	me->pr_ReturnAddr = APTR_OF(sp);
 	r.d[0] = len;
 	r.a[0] = APTR_OF(amargs);
 	r.a[6] = APTR_OF(SysBase);
@@ -1179,6 +1184,7 @@ int32_t dos_runcommand(BPTR seg, uint32_t stack, const char *args,
 			*p = lv.outer;
 			break;
 		}
+	me->pr_ReturnAddr = oldret;
 	if (ain && fh_priv(me->pr_CIS) == ain) {
 		ain->rpos = 0;
 		ain->rlen = keep_len;
