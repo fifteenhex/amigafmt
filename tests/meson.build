@@ -62,6 +62,7 @@ cases = [
   ['shell-tmpdir', '20', ['-c', 'Echo bad'], '', []],
   ['shell-fail', '10', ['-c', 'Echo one', '-c', 'targs', '-c', 'Echo bad'], '', []],
   ['vars', '0', ['-a', 'ENV=T:'], 'tcli', ['vars']],
+  ['names', '0', [], 'tcli', ['names']],
   ['packets', '0', [], 'tcli', ['pkt']],
 ]
 here = meson.current_build_dir()

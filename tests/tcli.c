@@ -5,6 +5,7 @@
      tcli exit <n>       Exit(n) from inside a nested function
      tcli internal       run the shell's Echo through FindSegment/RunCommand
      tcli vars           GetVar/SetVar, local and global
+     tcli names          utility.library's named objects
      tcli pkt            SendPkt and WaitPkt to a filesystem and the console
      tcli cd             CD through System(), in a directory with "boards"
                          and "devices" (the machine-sysfs board directory) */
@@ -157,6 +158,34 @@ int main(u32 arglen, char *args)
 			printf("named message: queued %ld\n",
 			       call(SysBase, LVOGetMsg, "a0", port) == (u32)msg);
 		}
+		return 0;
+	}
+	if (!strcmp(cmd, "names")) {
+		void *ub = (void *)call(SysBase, LVOOpenLibrary, "a1d0", "utility.library", 39);
+		u32 tags[] = { 4000, 1, 4003, 1, 0 };   /* NameSpace, NODUPS */
+		u32 prio[] = { 4002, 5, 4001, 16, 0 };  /* Priority, UserSpace */
+		u32 ns = call(ub, LVOAllocNamedObjectA, "a0a1", "space", tags);
+		u32 a = call(ub, LVOAllocNamedObjectA, "a0a1", "Alpha", 0);
+		u32 b = call(ub, LVOAllocNamedObjectA, "a0a1", "beta", prio);
+		u32 dup = call(ub, LVOAllocNamedObjectA, "a0a1", "ALPHA", 0);
+		u32 o, r1, r2, r3;
+		r1 = call(ub, LVOAddNamedObject, "a0a1", ns, a);
+		r2 = call(ub, LVOAddNamedObject, "a0a1", ns, b);
+		r3 = call(ub, LVOAddNamedObject, "a0a1", ns, dup);
+		printf("add %ld %ld %ld (no duplicates)\n", r1, r2, r3);
+		printf("user space %ld\n", *(u32 *)b != 0);
+		for (o = 0; (o = call(ub, LVOFindNamedObject, "a0a1a2", ns, 0, o)); )
+			printf("found %s\n", (char *)call(ub, LVONamedObjectName, "a0", o));
+		o = call(ub, LVOFindNamedObject, "a0a1a2", ns, "alpha", 0);
+		r1 = call(ub, LVOAttemptRemNamedObject, "a0", a);
+		printf("alpha %ld, remove while in use %ld\n", o == a, r1);
+		call(ub, LVOReleaseNamedObject, "a0", o);
+		call(ub, LVOReleaseNamedObject, "a0", o);
+		r1 = call(ub, LVOAttemptRemNamedObject, "a0", a);
+		r2 = call(ub, LVOFindNamedObject, "a0a1a2", ns, "alpha", 0);
+		printf("remove %ld, then found %ld\n", r1, r2);
+		call(ub, LVOFreeNamedObject, "a0", a);
+		call(SysBase, LVOCloseLibrary, "a1", ub);
 		return 0;
 	}
 	return 10;

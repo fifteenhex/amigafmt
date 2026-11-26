@@ -5,6 +5,7 @@
  * Plus version.library, which only exists to carry a version number.
  */
 #include <string.h>
+#include <strings.h>
 #include "af.h"
 
 struct Library *UtilityBase;
@@ -300,6 +301,209 @@ static void u_GetUniqueID(struct frame *f)
 	RET(++id);
 }
 
+/*
+ * Named objects and name spaces (utility/name.h).  The program sees only
+ * no_Object, the first long; the rest is ours.  The root name space is
+ * a static object.
+ */
+#define ANO_NameSpace 4000
+#define ANO_UserSpace 4001
+#define ANO_Priority  4002
+#define ANO_Flags     4003
+#define NSF_NODUPS    1
+#define NSF_CASE      2
+
+struct nobj {
+	APTR no_Object;                 /* the public part */
+	struct nobj *next, *space;      /* in its name space; which one */
+	struct nobj *first;             /* the objects in ours, if any */
+	int has_space, flags, pri, uses, removed;
+	struct Message *remmsg;
+	char name[];
+};
+
+static struct nobj root_space = { .has_space = 1 };
+
+static struct nobj *ns_of(uint32_t a)
+{
+	struct nobj *o = a ? PTR(a) : &root_space;
+
+	return o->has_space ? o : NULL;
+}
+
+static int ns_cmp(struct nobj *ns, const char *a, const char *b)
+{
+	return ns->flags & NSF_CASE ? strcmp(a, b) : strcasecmp(a, b);
+}
+
+static void u_AllocNamedObjectA(struct frame *f)
+{
+	const char *name = PTR(A(0));
+	struct TagItem *t = PTR(A(1)), *x;
+	uint32_t user = 0;
+	struct nobj *o;
+
+	if (!name) {
+		RET(0);
+		return;
+	}
+	o = amem_alloc(sizeof(*o) + strlen(name) + 1);
+	if (!o) {
+		RET(0);
+		return;
+	}
+	strcpy(o->name, name);
+	o->uses = 1;
+	while ((x = next_tag(&t))) {
+		switch (x->ti_Tag) {
+		case ANO_NameSpace: o->has_space = x->ti_Data != 0; break;
+		case ANO_UserSpace: user = x->ti_Data; break;
+		case ANO_Priority: o->pri = (int8_t)x->ti_Data; break;
+		case ANO_Flags: o->flags = x->ti_Data & 3; break;
+		}
+	}
+	if (user)
+		o->no_Object = APTR_OF(amem_alloc(user));
+	RET(o);
+}
+
+static void u_FreeNamedObject(struct frame *f)
+{
+	struct nobj *o = PTR(A(0));
+
+	if (!o)
+		return;
+	if (o->no_Object)
+		amem_free(PTR(o->no_Object));
+	amem_free(o);
+}
+
+static void u_AddNamedObject(struct frame *f)
+{
+	struct nobj *ns = ns_of(A(0)), *o = PTR(A(1)), **p;
+
+	if (!ns || !o) {
+		RET(DOSFALSE);
+		return;
+	}
+	if (ns->flags & NSF_NODUPS)
+		for (struct nobj *q = ns->first; q; q = q->next)
+			if (!ns_cmp(ns, q->name, o->name)) {
+				RET(DOSFALSE);
+				return;
+			}
+	for (p = &ns->first; *p && (*p)->pri >= o->pri; p = &(*p)->next)
+		;
+	o->next = *p;
+	*p = o;
+	o->space = ns;
+	o->removed = 0;
+	RET(DOSTRUE);
+}
+
+static void unlink_obj(struct nobj *o)
+{
+	struct nobj **p;
+
+	if (!o->space)
+		return;
+	for (p = &o->space->first; *p; p = &(*p)->next)
+		if (*p == o) {
+			*p = o->next;
+			break;
+		}
+	o->space = NULL;
+	o->next = NULL;
+}
+
+static void u_FindNamedObject(struct frame *f)
+{
+	struct nobj *ns = ns_of(A(0)), *last = PTR(A(2)), *o;
+	const char *name = PTR(A(1));
+
+	if (!ns) {
+		RET(0);
+		return;
+	}
+	for (o = last ? last->next : ns->first; o; o = o->next)
+		if (!o->removed && (!name || !ns_cmp(ns, o->name, name))) {
+			o->uses++;
+			RET(o);
+			return;
+		}
+	RET(0);
+}
+
+static void u_NamedObjectName(struct frame *f)
+{
+	struct nobj *o = PTR(A(0));
+
+	RET(o ? APTR_OF(o->name) : 0);
+}
+
+/* the last use of a removed object: it leaves its name space */
+static void obj_released(struct nobj *o)
+{
+	extern void exec_reply(struct Message *m);
+
+	if (o->removed && o->uses <= 0) {
+		unlink_obj(o);
+		if (o->remmsg) {
+			o->remmsg->mn_Node.ln_Name = APTR_OF(o);
+			exec_reply(o->remmsg);
+			o->remmsg = NULL;
+		}
+	}
+}
+
+static void u_ReleaseNamedObject(struct frame *f)
+{
+	struct nobj *o = PTR(A(0));
+
+	if (!o)
+		return;
+	if (o->uses > 0)
+		o->uses--;
+	obj_released(o);
+}
+
+static void u_AttemptRemNamedObject(struct frame *f)
+{
+	struct nobj *o = PTR(A(0));
+
+	if (!o || o->removed || o->uses > 1) {
+		RET(DOSFALSE);
+		return;
+	}
+	o->uses = 0;
+	unlink_obj(o);
+	RET(DOSTRUE);
+}
+
+static void u_RemNamedObject(struct frame *f)
+{
+	extern void exec_reply(struct Message *m);
+	struct nobj *o = PTR(A(0));
+	struct Message *m = PTR(A(1));
+
+	if (!o)
+		return;
+	if (o->removed) {               /* someone else is removing it */
+		if (m) {
+			m->mn_Node.ln_Name = 0;
+			exec_reply(m);
+		}
+		if (o->uses > 0)
+			o->uses--;
+		return;
+	}
+	o->removed = 1;
+	o->remmsg = m;
+	if (o->uses > 0)
+		o->uses--;
+	obj_released(o);
+}
+
 static const struct libimpl utility_impl[] = {
 	{ "ToUpper", u_ToUpper }, { "ToLower", u_ToLower },
 	{ "Stricmp", u_Stricmp }, { "Strnicmp", u_Strnicmp },
@@ -315,6 +519,14 @@ static const struct libimpl utility_impl[] = {
 	{ "FreeTagItems", u_FreeTagItems },
 	{ "CloneTagItems", u_CloneTagItems },
 	{ "CallHookPkt", u_CallHookPkt }, { "GetUniqueID", u_GetUniqueID },
+	{ "AllocNamedObjectA", u_AllocNamedObjectA },
+	{ "FreeNamedObject", u_FreeNamedObject },
+	{ "AddNamedObject", u_AddNamedObject },
+	{ "FindNamedObject", u_FindNamedObject },
+	{ "NamedObjectName", u_NamedObjectName },
+	{ "ReleaseNamedObject", u_ReleaseNamedObject },
+	{ "AttemptRemNamedObject", u_AttemptRemNamedObject },
+	{ "RemNamedObject", u_RemNamedObject },
 	{ NULL, NULL }
 };
 
