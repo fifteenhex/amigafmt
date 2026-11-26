@@ -65,6 +65,7 @@ cases = [
   ['names', '0', [], 'tcli', ['names']],
   ['keymap', '0', [], 'tcli', ['keymap']],
   ['packets', '0', [], 'tcli', ['pkt']],
+  ['proc', '0', [], 'tcli', ['proc']],
 ]
 here = meson.current_build_dir()
 # a board directory with the layout of /sys/bus/zorro, for machine-sysfs

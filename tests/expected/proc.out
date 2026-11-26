@@ -1,0 +1,4 @@
+process 1
+child done, still here 1
+own lock kept 1
+rc=0

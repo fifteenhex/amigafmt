@@ -9,7 +9,9 @@
      tcli keymap         MapRawKey through a keymap's tables
      tcli pkt            SendPkt and WaitPkt to a filesystem and the console
      tcli cd             CD through System(), in a directory with "boards"
-                         and "devices" (the machine-sysfs board directory) */
+                         and "devices" (the machine-sysfs board directory)
+     tcli proc           CreateNewProc() copies the current directory lock,
+                         in the same directory */
 #include "t.h"
 
 /* keymap.library (not in lvo.h) */
@@ -44,6 +46,17 @@ static void deep(int n, s32 code)
 		deep(n - 1, code);
 	else
 		call(DOSBase, LVOExit, "d1", code);
+}
+
+/* a process that puts its own current directory lock down, as it may:
+   the lock is its copy, not its creator's */
+static volatile int child_done;
+static void child(void)
+{
+	u32 l = call(DOSBase, LVOLock, "d1d2", "SYS:", -2);
+
+	call(DOSBase, LVOUnLock, "d1", call(DOSBase, LVOCurrentDir, "d1", l));
+	child_done = 1;
 }
 
 static s32 num(const char *s)
@@ -91,6 +104,22 @@ int main(u32 arglen, char *args)
 		call(DOSBase, LVOSystemTagList, "d1d2", "CD boards", 0);
 		back = call(DOSBase, LVOCurrentDir, "d1", old);
 		printf("own lock kept %ld\n", back == mine);
+		call(DOSBase, LVOUnLock, "d1", mine);
+		return 0;
+	}
+	if (!strcmp(cmd, "proc")) {
+		u32 tags[] = { 0x800003e8 + 3, (u32)child,        /* NP_Entry */
+			       0x800003e8 + 12, (u32)"child", 0 };  /* NP_Name */
+		u32 mine = call(DOSBase, LVOLock, "d1d2", "zorro", -2), old, l;
+
+		old = call(DOSBase, LVOCurrentDir, "d1", mine);
+		printf("process %ld\n", call(DOSBase, LVOCreateNewProc, "d1", tags) != 0);
+		while (!child_done)
+			call(DOSBase, LVODelay, "d1", 1);
+		l = call(DOSBase, LVOLock, "d1d2", "devices", -2);
+		printf("child done, still here %ld\n", l != 0);
+		call(DOSBase, LVOUnLock, "d1", l);
+		printf("own lock kept %ld\n", call(DOSBase, LVOCurrentDir, "d1", old) == mine);
 		call(DOSBase, LVOUnLock, "d1", mine);
 		return 0;
 	}

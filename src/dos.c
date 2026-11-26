@@ -1716,6 +1716,7 @@ static struct Process *new_process(const char *name, int pri, uint32_t entry, ui
 	uint32_t *sp;
 	struct TagItem *t = tags, *x;
 	BPTR in = me->pr_CIS, out = me->pr_COS, err = me->pr_CES;
+	int curdir = 0, homedir = 0;
 
 	strcpy(nm, name);
 	p->pr_Task.tc_Node.ln_Type = NT_PROCESS;
@@ -1728,8 +1729,6 @@ static struct Process *new_process(const char *name, int pri, uint32_t entry, ui
 	p->pr_MsgPort.mp_SigTask = APTR_OF(p);
 	exec_newlist(&p->pr_MsgPort.mp_MsgList);
 	exec_newlist((struct List *)&p->pr_LocalVars);
-	p->pr_CurrentDir = me->pr_CurrentDir;
-	p->pr_HomeDir = me->pr_HomeDir;
 	p->pr_ConsoleTask = me->pr_ConsoleTask;
 	p->pr_FileSystemTask = me->pr_FileSystemTask;
 	p->pr_WindowPtr = me->pr_WindowPtr;
@@ -1740,10 +1739,10 @@ static struct Process *new_process(const char *name, int pri, uint32_t entry, ui
 		case 4: in = x->ti_Data; break;
 		case 5: out = x->ti_Data; break;
 		case 8: err = x->ti_Data; break;
-		case 10: p->pr_CurrentDir = x->ti_Data; break;
+		case 10: p->pr_CurrentDir = x->ti_Data; curdir = 1; break;
 		case 14: p->pr_ConsoleTask = x->ti_Data; break;
 		case 15: p->pr_WindowPtr = x->ti_Data; break;
-		case 16: p->pr_HomeDir = x->ti_Data; break;
+		case 16: p->pr_HomeDir = x->ti_Data; homedir = 1; break;
 		case 21: p->pr_Arguments = x->ti_Data; break;
 		case 24: p->pr_ExitCode = x->ti_Data; break;
 		case 25: p->pr_ExitData = x->ti_Data; break;
@@ -1752,6 +1751,13 @@ static struct Process *new_process(const char *name, int pri, uint32_t entry, ui
 	p->pr_CIS = in;
 	p->pr_COS = out;
 	p->pr_CES = err;
+	/* the current and home directories are copies of the caller's, which
+	   the new process may unlock (NP_CurrentDir and NP_HomeDir give it
+	   locks of its own) */
+	if (!curdir && me->pr_CurrentDir)
+		p->pr_CurrentDir = lock_new(lock_path(me->pr_CurrentDir), SHARED_LOCK);
+	if (!homedir && me->pr_HomeDir)
+		p->pr_HomeDir = lock_new(lock_path(me->pr_HomeDir), SHARED_LOCK);
 	if (stack < 4096)
 		stack = 4096;
 	st = amem_alloc(stack + 64);
