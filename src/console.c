@@ -198,9 +198,19 @@ int console_io(void *iop)
 }
 static void c_Nop(struct frame *f) { (void)f; }
 
+/*
+ * The private V36 vectors are the console's snip (copy and paste)
+ * interface: GetConSnip, SetConSnip, AddConSnipHook, RemConSnipHook
+ * (C:ConClip).  There is no console window to select text in, so there
+ * is never a snip and a hook is never called.
+ */
+static void c_Zero(struct frame *f) { RET(0); }
+
 static const struct fdent fd_console[] = {
 	{ 30, "BeginIO", "a1" }, { 36, "AbortIO", "a1" },
 	{ 42, "CDInputHandler", "a0/a1" }, { 48, "RawKeyConvert", "a0/a1/d1/a2" },
+	{ 54, "consolePrivate1", "" }, { 60, "consolePrivate2", "" },
+	{ 66, "consolePrivate3", "" }, { 72, "consolePrivate4", "" },
 	{ 0, 0, 0 }
 };
 
@@ -208,6 +218,8 @@ static const struct libimpl console_impl[] = {
 	{ "RawKeyConvert", c_RawKeyConvert },
 	{ "CDInputHandler", c_CDInputHandler },
 	{ "BeginIO", c_Nop }, { "AbortIO", c_Nop },
+	{ "consolePrivate1", c_Zero }, { "consolePrivate2", c_Nop },
+	{ "consolePrivate3", c_Nop }, { "consolePrivate4", c_Nop },
 	{ NULL, NULL }
 };
 
