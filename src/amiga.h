@@ -643,6 +643,8 @@ GSZ(Screen, 346); GSZ(Window, 136); GSZ(NewWindow, 52); GSZ(IntuiMessage, 52);
 GSZ(Gadget, 44); GSZ(PropInfo, 22); GSZ(StringInfo, 36); GSZ(IntuiText, 20);
 GSZ(Border, 16); GSZ(Image, 20); GSZ(Menu, 30); GSZ(MenuItem, 34);
 GSZ(WBStartup, 40); GSZ(DiskObject, 78);
+GSZ(MemHeader, 32); GSZ(ExpansionRom, 16); GSZ(ConfigDev, 68);
+GSZ(CurrentBinding, 16);
 #undef GSZ
 
 #define CHK(s, f, o) _Static_assert(offsetof(struct s, f) == (o), #s "." #f)
