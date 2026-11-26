@@ -935,7 +935,7 @@ static void d_GetDeviceProc(struct frame *f)
 	}
 	dp = amem_alloc(16);
 
-	dp[0] = APTR_OF(DOSBase);       /* any non-zero port */
+	dp[0] = dos_fs_port();          /* packets to it are answered */
 	if (c) {
 		snprintf(dev, sizeof(dev), "%.*s:", (int)(c - n), n);
 		lp = path_to_linux(dev, "/");
@@ -967,7 +967,7 @@ static void d_FreeDeviceProc(struct frame *f)
 
 static void d_DeviceProc(struct frame *f)
 {
-	RET(APTR_OF(DOSBase));
+	RET(dos_fs_port());
 	dos_set_ioerr(0);
 }
 

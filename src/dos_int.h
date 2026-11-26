@@ -31,6 +31,7 @@ int dos_fault_text(int32_t code, const char *hdr, char *buf, int32_t len);
 int32_t dos_runcommand(BPTR seg, uint32_t stack, const char *args,
 		       uint32_t len);
 void dos_set_reslist(BPTR head);
+APTR dos_fs_port(void);
 void lock_free(BPTR lock);
 
 /* the shell (shell.c) */

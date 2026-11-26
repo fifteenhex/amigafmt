@@ -744,7 +744,17 @@ static void msg_sent(struct MsgPort *p)
 
 static void e_PutMsg(struct frame *f)
 {
-	putmsg(PTR(A(0)), PTR(A(1)));
+	extern int dos_handler_port(APTR p);
+	extern int dos_is_packet(struct Message *m);
+	extern APTR dos_packet_msg(APTR port, struct Message *m);
+	struct Message *m = PTR(A(1));
+
+	/* a packet for one of dos's handlers is answered at once */
+	if (dos_handler_port(A(0)) && dos_is_packet(m)) {
+		msg_sent(PTR(dos_packet_msg(A(0), m)));
+		return;
+	}
+	putmsg(PTR(A(0)), m);
 	msg_sent(PTR(A(0)));
 }
 

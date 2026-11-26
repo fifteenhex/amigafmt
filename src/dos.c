@@ -15,6 +15,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <sys/select.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -1383,64 +1384,163 @@ static void d_StrToLong(struct frame *f)
 static void d_ErrorReport(struct frame *f) { RET(DOSTRUE); }
 
 /*
- * DoPkt(): no handlers here, so the few actions programs send to ask
- * questions are answered directly and the rest fail politely.
+ * Packets: no handlers here, so the few actions programs send to ask
+ * questions are answered directly and the rest fail politely.  DoPkt()
+ * asks this, and so does a packet PutMsg()ed to one of the handler
+ * ports (SendPkt() style), which is answered at once.
  */
 #define ACTION_CURRENT_VOLUME 7
+#define ACTION_WAIT_CHAR      20
 #define ACTION_DISK_INFO      25
 #define ACTION_INFO           26
+#define ACTION_SCREEN_MODE    994
+#define ACTION_CHANGE_SIGNAL  995
 #define ACTION_IS_FILESYSTEM  1027
 
-static void d_DoPkt(struct frame *f)
+static int console_raw(int raw);
+
+/*
+ * The console's IOStdReq and ConUnit, as a console window has them: what
+ * programs (Utilities/More) read for the size of the window in
+ * characters.  The size is the terminal's; topaz 8 cells.
+ */
+static uint8_t *console_ioreq(void)
+{
+	static uint8_t *io, *unit;
+	struct winsize ws;
+	int cols = 80, rows = 24, i;
+
+	if (!io) {
+		io = amem_alloc(48);
+		unit = amem_alloc(296);
+		*(APTR *)(io + 20) = APTR_OF(lib_build(&lib_console));
+		*(APTR *)(io + 24) = APTR_OF(unit);     /* io_Unit */
+		for (i = 0; i < 80; i++)                /* cu_TabStops */
+			*(uint16_t *)(unit + 98 + 2 * i) = i * 8;
+	}
+	if ((!ioctl(1, TIOCGWINSZ, &ws) || !ioctl(0, TIOCGWINSZ, &ws)) &&
+	    ws.ws_row && ws.ws_col) {
+		cols = ws.ws_col;
+		rows = ws.ws_row;
+	}
+	*(int16_t *)(unit + 42) = cols - 1;             /* cu_XMax */
+	*(int16_t *)(unit + 44) = rows - 1;             /* cu_YMax */
+	*(int16_t *)(unit + 46) = 8;                    /* cu_XRSize */
+	*(int16_t *)(unit + 48) = 8;                    /* cu_YRSize */
+	*(int16_t *)(unit + 54) = cols * 8 - 1;         /* cu_XRExtant */
+	*(int16_t *)(unit + 56) = rows * 8 - 1;         /* cu_YRExtant */
+	return io;
+}
+
+int32_t dos_packet(APTR port, int32_t type, const int32_t *arg, int32_t *res2)
 {
 	extern int lock_info(BPTR lock, struct InfoData *id);
 	extern int path_info(const char *lpath, struct InfoData *id);
 	extern const char *port_path(APTR port);
-	const char *vp = port_path(D(1));
+	const char *vp = port_path(port);
 
-	if (D(1) == APTR_OF(con_port)) {
-		/* the console: DISK_INFO is how programs find its window
-		   (id_VolumeNode); there is none */
-		if (D(2) == ACTION_DISK_INFO) {
-			struct InfoData *id = BADDR(D(3));
+	*res2 = 0;
+	if (port == APTR_OF(con_port)) {
+		switch (type) {
+		case ACTION_DISK_INFO: {
+			/* how programs find the console's window
+			   (id_VolumeNode): there is none; and its unit
+			   (id_InUse, an IOStdReq) */
+			struct InfoData *id = BADDR(arg[0]);
 			memset(id, 0, sizeof(*id));
 			id->id_DiskType = 0x434f4e00;   /* ID_CON */
 			id->id_DiskState = 82;
-			D(1) = 0;
-			RET(DOSTRUE);
-			return;
+			id->id_InUse = APTR_OF(console_ioreq());
+			return DOSTRUE;
 		}
-		if (D(2) == ACTION_IS_FILESYSTEM) {
-			D(1) = 0;
-			RET(DOSFALSE);
-			return;
+		case ACTION_IS_FILESYSTEM:
+			return DOSFALSE;
+		case ACTION_SCREEN_MODE:
+			return console_raw(arg[0] != 0) ? DOSTRUE : DOSFALSE;
+		case ACTION_CHANGE_SIGNAL:
+			*res2 = 0;
+			return DOSTRUE;
+		case ACTION_WAIT_CHAR: {
+			struct afh *a = fh_priv(me->pr_CIS);
+			fd_set fs;
+			struct timeval tv;
+			if (a && (a->unget >= 0 || a->rpos < a->rlen))
+				return DOSTRUE;
+			dos_flush_all();
+			FD_ZERO(&fs);
+			FD_SET(0, &fs);
+			tv.tv_sec = (uint32_t)arg[0] / 1000000;
+			tv.tv_usec = (uint32_t)arg[0] % 1000000;
+			return select(1, &fs, NULL, NULL, &tv) > 0 ? DOSTRUE : DOSFALSE;
+		}
 		}
 	}
-	switch (D(2)) {
+	switch (type) {
 	case ACTION_IS_FILESYSTEM:
-		D(1) = 0;
-		RET(DOSTRUE);
-		return;
+		return DOSTRUE;
 	case ACTION_DISK_INFO:
 		if (vp)
-			path_info(vp, BADDR(D(3)));
+			path_info(vp, BADDR(arg[0]));
 		else
-			lock_info(0, BADDR(D(3)));
-		D(1) = 0;
-		RET(DOSTRUE);
-		return;
+			lock_info(0, BADDR(arg[0]));
+		return DOSTRUE;
 	case ACTION_INFO:
-		lock_info(D(3), BADDR(D(4)));
-		D(1) = 0;
-		RET(DOSTRUE);
-		return;
+		lock_info(arg[0], BADDR(arg[1]));
+		return DOSTRUE;
 	}
 	if (af_trace)
-		af_warn("DoPkt action %d refused", (int)D(2));
-	dos_set_ioerr(ERROR_ACTION_NOT_KNOWN);
-	D(1) = ERROR_ACTION_NOT_KNOWN;
-	RET(DOSFALSE);
+		af_warn("packet type %d refused", (int)type);
+	*res2 = ERROR_ACTION_NOT_KNOWN;
+	return DOSFALSE;
 }
+
+static void d_DoPkt(struct frame *f)
+{
+	int32_t arg[5] = { D(3), D(4), D(5), D(6), D(7) }, res2;
+	int32_t r = dos_packet(D(1), D(2), arg, &res2);
+
+	dos_set_ioerr(res2);
+	D(1) = res2;
+	RET(r);
+}
+
+/* is p a port packets can be sent to (a handler's)? */
+int dos_handler_port(APTR p)
+{
+	extern const char *port_path(APTR port);
+
+	return p && (p == APTR_OF(con_port) || p == APTR_OF(fs_port) ||
+		     port_path(p));
+}
+
+/* is m a DOS packet: ln_Name points at a DosPacket whose dp_Link is m.
+   A message's name is a string, which may end at the edge of what is
+   mapped, so the longword is read only when mincore() says it can be */
+int dos_is_packet(struct Message *m)
+{
+	uintptr_t a = (uintptr_t)m->mn_Node.ln_Name, pg = sysconf(_SC_PAGESIZE);
+	unsigned char v[2];
+
+	if (!a || (a & 1) ||
+	    mincore((void *)(a & ~(pg - 1)), (a & (pg - 1)) + 4, v))
+		return 0;
+	return *(uint32_t *)a == APTR_OF(m);
+}
+
+/* a packet PutMsg()ed to a handler port: answered and returned to
+   its reply port, which is what this returns */
+APTR dos_packet_msg(APTR port, struct Message *m)
+{
+	int32_t *dp = PTR(m->mn_Node.ln_Name);  /* struct DosPacket */
+	APTR reply = dp[1];
+
+	dp[3] = dos_packet(port, dp[2], dp + 5, &dp[4]);
+	dp[1] = port;                           /* dp_Port: the handler's */
+	exec_putmsg(PTR(reply), m);
+	return reply;
+}
+
+APTR dos_fs_port(void) { return APTR_OF(fs_port); }
 
 /* SetMode(fh, 1): a raw console, as termios non-canonical, no echo */
 static struct termios saved_tio;
@@ -1452,29 +1552,37 @@ static void restore_tio(void)
 		tcsetattr(tio_saved, TCSANOW, &saved_tio);
 }
 
-static void d_SetMode(struct frame *f)
+static int set_raw(int fd, int raw)
 {
-	struct afh *a = fh_priv(D(1));
 	struct termios t;
-	int fd = a ? a->rfd : -1;
 
-	if (fd < 0 || !isatty(fd) || tcgetattr(fd, &t)) {
-		RET(DOSFALSE);
-		return;
-	}
+	if (fd < 0 || !isatty(fd) || tcgetattr(fd, &t))
+		return 0;
 	if (tio_saved < 0) {
 		saved_tio = t;
 		tio_saved = fd;
 		atexit(restore_tio);
 	}
-	if (D(2)) {
+	if (raw) {
 		t.c_lflag &= ~(ICANON | ECHO);
 		t.c_cc[VMIN] = 1;
 		t.c_cc[VTIME] = 0;
 	} else
 		t = saved_tio;
 	tcsetattr(fd, TCSANOW, &t);
-	RET(DOSTRUE);
+	return 1;
+}
+
+static int console_raw(int raw)
+{
+	return set_raw(0, raw);
+}
+
+static void d_SetMode(struct frame *f)
+{
+	struct afh *a = fh_priv(D(1));
+
+	RET(set_raw(a ? a->rfd : -1, D(2)) ? DOSTRUE : DOSFALSE);
 }
 
 static void d_DosGetString(struct frame *f)
