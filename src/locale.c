@@ -260,6 +260,9 @@ static const struct libimpl locale_impl[] = {
 	{ "OpenCatalogA", lo_Zero }, { "OpenLocale", lo_OpenLocale },
 	{ "ParseDate", lo_Zero },
 	{ "StrConvert", lo_StrConvert }, { "StrnCmp", lo_StrnCmp },
+	/* -168 is the prefs update IPrefs calls with new locale settings:
+	   there is one built-in locale, which stays */
+	{ "localePrivate2", lo_OpenLocale },
 	{ NULL, NULL }
 };
 
