@@ -1,0 +1,39 @@
+name: build
+
+on: [push, pull_request]
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cpu: ['68040', '68060']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # qemu-user provides qemu-m68k, the cross file's exe wrapper
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build python3 \
+            gcc-m68k-linux-gnu libc6-dev-m68k-cross qemu-user
+
+      - name: Configure
+        run: |
+          m68k-linux-gnu-gcc --version
+          meson setup --cross-file cross/m68k-linux-gnu.ini \
+            -Dcpu=${{ matrix.cpu }} build
+
+      - name: Build
+        run: ninja -C build
+
+      - name: Test
+        run: meson test -C build --print-errorlogs
+
+      - name: Upload the binary
+        uses: actions/upload-artifact@v5
+        with:
+          name: amigafmt-${{ matrix.cpu }}
+          path: build/amigafmt
