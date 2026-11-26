@@ -1877,6 +1877,9 @@ static void gfx_setup(struct Library *b)
 	extern void gfx_monitors_init(void);
 
 	GfxBase = b;            /* DefaultFont is set when wbde gives topaz */
+	*((uint8_t *)b + 0xec) = machine_chiprev();     /* ChipRevBits0 */
+	/* MemType: an AGA machine's chip RAM is 32 bits wide, double CAS */
+	*((uint8_t *)b + 0xed) = machine.chipset == CHIPSET_AGA ? 3 : 0;
 	gfx_monitors_init();
 }
 

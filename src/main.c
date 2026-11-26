@@ -72,8 +72,8 @@ static uint16_t custom_read(uint32_t off)
 		return blitter_read(off);
 	}
 	case 0x002: return 0x03f0;              /* DMACONR: the blitter is never busy */
-	case 0x004: return 0x3300;              /* VPOSR: Alice, NTSC */
-	case 0x07c: return 0x00f8;              /* DENISEID: Lisa */
+	case 0x004: return machine_vposr();     /* VPOSR: Agnus/Alice ID */
+	case 0x07c: return machine_deniseid();  /* DENISEID */
 	default: return 0;
 	}
 }

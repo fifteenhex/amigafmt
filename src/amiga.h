@@ -85,6 +85,38 @@ struct Task {
 	APTR tc_UserData;
 };
 
+struct MemHeader {
+	struct Node mh_Node;
+	uint16_t mh_Attributes;
+	APTR mh_First, mh_Lower, mh_Upper;
+	uint32_t mh_Free;
+};
+
+/* ---- expansion ---- */
+
+struct ExpansionRom {
+	uint8_t er_Type, er_Product, er_Flags, er_Reserved03;
+	uint16_t er_Manufacturer;
+	uint32_t er_SerialNumber;
+	uint16_t er_InitDiagVec;
+	uint8_t er_Reserved0c, er_Reserved0d, er_Reserved0e, er_Reserved0f;
+};
+
+struct ConfigDev {
+	struct Node cd_Node;
+	uint8_t cd_Flags, cd_Pad;
+	struct ExpansionRom cd_Rom;
+	APTR cd_BoardAddr;
+	uint32_t cd_BoardSize;
+	uint16_t cd_SlotAddr, cd_SlotSize;
+	APTR cd_Driver, cd_NextCD;
+	uint32_t cd_Unused[4];
+};
+
+struct CurrentBinding {
+	APTR cb_ConfigDev, cb_FileName, cb_ProductString, cb_ToolTypes;
+};
+
 struct IntVector {
 	APTR iv_Data, iv_Code, iv_Node;
 };
@@ -327,6 +359,8 @@ struct ClockData {
 #define MEMF_PUBLIC   (1 << 0)
 #define MEMF_CHIP     (1 << 1)
 #define MEMF_FAST     (1 << 2)
+#define MEMF_LOCAL    (1 << 8)
+#define MEMF_24BITDMA (1 << 9)
 #define MEMF_CLEAR    (1 << 16)
 #define MEMF_LARGEST  (1 << 17)
 #define MEMF_TOTAL    (1 << 19)

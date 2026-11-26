@@ -117,6 +117,33 @@ void timer_sleep(int64_t us);
 
 /* exec */
 void exec_init(void);
+void exec_newlist(void *l);
+void exec_addtail(void *l, void *n);
+void exec_enqueue(void *l, void *n);
+void exec_remove(void *n);
+
+/* the machine (machine.c) */
+#define CHIPSET_OCS 0
+#define CHIPSET_ECS 1
+#define CHIPSET_AGA 2
+#define MACHINE_REGIONS 8
+struct machine {
+	int amiga;              /* Linux says this is an Amiga */
+	char model[32];
+	int chipset, pal, hr_denise;
+	uint32_t eclock, chip_size;
+	int psfreq;
+	int nregions;
+	struct { uint32_t base, size; } region[MACHINE_REGIONS];   /* fast RAM */
+};
+extern struct machine machine;
+void machine_init(void);
+void machine_memlist(struct ExecBase *e);
+void machine_memfree(uint32_t *chip_total, uint32_t *chip_free,
+		     uint32_t *fast_total, uint32_t *fast_free);
+uint8_t machine_chiprev(void);
+uint16_t machine_vposr(void);
+uint16_t machine_deniseid(void);
 /* Linux descriptors a task sleeps on (see exec.c) */
 struct pollfd;
 struct exec_fdwait {

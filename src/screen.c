@@ -360,7 +360,7 @@ static uint8_t *ms[2];
 static uint8_t *make_spec(int pal);
 
 /* GfxBase->MonitorList (0x180) with both, default_monitor (0x18e) NTSC,
-   DisplayFlags (0xce) NTSC: offsets from the NDK's graphics/gfxbase.h */
+   DisplayFlags (0xce) the machine's: offsets from the NDK's graphics/gfxbase.h */
 void gfx_monitors_init(void)
 {
 	extern void exec_addtail(void *l, void *n);
@@ -376,7 +376,8 @@ void gfx_monitors_init(void)
 	exec_addtail(l, ms[0]);
 	exec_addtail(l, ms[1]);
 	*(uint32_t *)((uint8_t *)GfxBase + 0x18e) = APTR_OF(ms[0]);
-	*(uint16_t *)((uint8_t *)GfxBase + 0xce) = 1;          /* NTSC */
+	/* DisplayFlags: NTSC, or PAL|REALLY_PAL */
+	*(uint16_t *)((uint8_t *)GfxBase + 0xce) = machine.pal ? 4 | 16 : 1;
 }
 
 static uint8_t *monitor_spec(int pal)

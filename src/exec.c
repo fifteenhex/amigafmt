@@ -170,27 +170,18 @@ static void e_FreeVec(struct frame *f)
 }
 
 /*
- * Linux's free memory as fast RAM, capped at 1 GB so programs that add
- * the figures up in 32 bits stay sane; "chip RAM" is a token 2 MB, of
- * which 1.5 MB free, because nothing here is chip RAM.
+ * The memory list's figures (machine.c): Linux's free memory as fast RAM,
+ * and a token chip RAM, of which three quarters free, because nothing
+ * here is chip RAM.
  */
 static void e_AvailMem(struct frame *f)
 {
-	uint32_t req = D(1), fast, chip;
-	struct sysinfo si;
+	uint32_t req = D(1), fast, chip, chip_total, chip_free, fast_total,
+		fast_free;
 
-	if (req & MEMF_TOTAL) {
-		uint64_t t = 0;
-		if (!sysinfo(&si))
-			t = (uint64_t)si.totalram * si.mem_unit;
-		fast = t > 0x40000000 ? 0x40000000 : (uint32_t)t;
-		chip = 0x200000;
-	} else {
-		fast = amem_avail();
-		if (fast > 0x40000000)
-			fast = 0x40000000;
-		chip = 0x180000;
-	}
+	machine_memfree(&chip_total, &chip_free, &fast_total, &fast_free);
+	fast = req & MEMF_TOTAL ? fast_total : fast_free;
+	chip = req & MEMF_TOTAL ? chip_total : chip_free;
 	RET(req & MEMF_CHIP ? chip : req & MEMF_FAST ? fast :
 	    (req & MEMF_LARGEST) ? fast : chip + fast);
 }
@@ -1265,6 +1256,10 @@ static void exec_setup(struct Library *b)
 	newlist(&e->TaskWait);
 	newlist(&e->SemaphoreList);
 	e->LibList.lh_Type = NT_LIBRARY;
+	e->MemList.lh_Type = NT_MEMORY;
+	e->ResourceList.lh_Type = NT_RESOURCE;
+	e->DeviceList.lh_Type = NT_DEVICE;
+	e->PortList.lh_Type = NT_MSGPORT;
 	e->AttnFlags = AFF_68010 | AFF_68020;
 	if (cpu >= 68030)
 		e->AttnFlags |= AFF_68030;
@@ -1272,10 +1267,12 @@ static void exec_setup(struct Library *b)
 		e->AttnFlags |= AFF_68040 | AFF_68881 | AFF_68882 | AFF_FPU40;
 	if (cpu >= 68060)
 		e->AttnFlags |= AFF_68060;
-	e->VBlankFrequency = 50;
-	e->PowerSupplyFrequency = 50;
-	e->ex_EClockFrequency = 709379;
-	e->MaxLocMem = 0x200000;
+	machine_init();
+	e->VBlankFrequency = machine.pal ? 50 : 60;
+	e->PowerSupplyFrequency = machine.psfreq;
+	e->ex_EClockFrequency = machine.eclock;
+	e->MaxLocMem = machine.chip_size;
+	machine_memlist(e);
 	e->Quantum = 4;
 }
 
@@ -1307,3 +1304,5 @@ void exec_init(void)
 /* used by dos for NewList-style setup */
 void exec_newlist(void *l) { newlist(l); }
 void exec_addtail(void *l, void *n) { addtail(l, n); }
+void exec_enqueue(void *l, void *n) { enqueue(l, n); }
+void exec_remove(void *n) { remove_node(n); }

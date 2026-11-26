@@ -148,7 +148,7 @@ struct Library *lib_build(struct amilib *l)
 	cache_flush(mem, neg + sizeof(struct Library) + l->possize
 		    + l->nslots * 12 + 64);
 
-	b->lib_Node.ln_Type = NT_LIBRARY;
+	b->lib_Node.ln_Type = l->device ? NT_DEVICE : NT_LIBRARY;
 	b->lib_Node.ln_Name = APTR_OF(l->name);
 	b->lib_Flags = 6;                       /* LIBF_CHANGED|LIBF_SUMUSED */
 	b->lib_NegSize = neg;
