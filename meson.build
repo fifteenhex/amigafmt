@@ -66,3 +66,9 @@ if get_option('ndk_fd_dir') != ''
 else
   message('ndk_fd_dir not set: the fdcheck test is not run')
 endif
+
+# the programs of a real AmigaOS installation, when there is one to use
+if get_option('sys_dir') != ''
+  test('survey', find_program('tools/survey.sh'), args: [get_option('sys_dir'), amigafmt],
+       timeout: 3600, suite: 'survey')
+endif
