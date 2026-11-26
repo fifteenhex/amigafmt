@@ -920,8 +920,20 @@ static void d_GetDeviceProc(struct frame *f)
 {
 	const char *n = PTR(D(1));
 	const char *c = strchr(n, ':');
-	uint32_t *dp = amem_alloc(16);
+	uint32_t *dp, *old = PTR(D(2));
 	char dev[256], *lp;
+
+	if (old) {
+		/* the next directory of a multi-directory assign: an assign
+		   has only one here */
+		if (old[2] & 1)
+			lock_free(old[1]);
+		amem_free(old);
+		dos_set_ioerr(ERROR_NO_MORE_ENTRIES);
+		RET(0);
+		return;
+	}
+	dp = amem_alloc(16);
 
 	dp[0] = APTR_OF(DOSBase);       /* any non-zero port */
 	if (c) {
@@ -936,7 +948,9 @@ static void d_GetDeviceProc(struct frame *f)
 		dp[1] = lock_new(lp, SHARED_LOCK);
 		dp[2] = 1;              /* DVPF_UNLOCK */
 		free(lp);
-	}
+	} else
+		dp[1] = me->pr_CurrentDir;      /* a relative name: the current
+						   directory, which stays */
 	RET(dp);
 }
 
