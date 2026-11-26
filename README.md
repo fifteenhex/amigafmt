@@ -56,7 +56,9 @@ cannot be run, the whole build gets `-ffloat-store`, which avoids it.
 `tools/mkhunk.py` and runs each through amigafmt (`tests/check.sh`,
 using `qemu-m68k` when cross-building), comparing the output with
 `tests/expected/`.  `UPDATE=1 tests/check.sh ...` as meson invokes it
-(see `meson test -v`) re-records a case.
+(see `meson test -v`) re-records a case.  GitHub Actions
+(`.github/workflows/build.yml`) builds and tests both CPUs this way on
+every push and pull request.
 
 The library vector tables in `src/fdtab.c` are generated from the
 AmigaOS `.fd` files and kept in the tree; `ninja -C build fdtab`
