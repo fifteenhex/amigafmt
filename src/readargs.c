@@ -108,9 +108,7 @@ static int parse_template(const char *t, struct targ *ta, int max)
 			len = sizeof(item) - 1;
 		memcpy(item, t, len);
 		item[len] = 0;
-		t += len + (e != NULL);
-		if (!len)
-			continue;
+		t += len + (e != NULL);         /* an empty item is a slot too */
 		p = strchr(item, '/');
 		if (p)
 			*p++ = 0;
@@ -251,7 +249,7 @@ uint32_t ra_readargs(const char *tmpl, int32_t *array, struct RDArgs *rd)
 {
 	struct targ ta[64];
 	char *res[64], **multi = NULL, *w, *line = NULL;
-	int nmulti = 0, n, pos, last_pos, i, it, err = 0;
+	int nmulti = 0, n, pos, last_pos, i, it, err = 0, start = 0;
 	int32_t numv[64];
 	struct src x;
 	int filled[64];
@@ -315,6 +313,9 @@ uint32_t ra_readargs(const char *tmpl, int32_t *array, struct RDArgs *rd)
 		}
 		next = pos + 1;
 		t = pos < n ? &ta[pos] : NULL;
+		start = x.pos;
+		while (start < x.len && (x.s[start] == ' ' || x.s[start] == '\t'))
+			start++;
 		it = read_item(&x, &w);
 		if (it == ITEM_ERROR) {
 			free(w);
@@ -332,6 +333,15 @@ uint32_t ra_readargs(const char *tmpl, int32_t *array, struct RDArgs *rd)
 		}
 		if (it == ITEM_UNQUOTED) {
 			int k = find_key(ta, n, w);
+			if ((k < 0 || filled[k]) && x.pos < x.len &&
+			    x.s[x.pos] == '=') {
+				/* not a keyword: "a=b" is one word */
+				size_t l = strlen(w);
+				while (x.pos < x.len && x.s[x.pos] != ' ' &&
+				       x.s[x.pos] != '\t' && x.s[x.pos] != '\n')
+					w[l++] = x.s[x.pos++];
+				w[l] = 0;
+			}
 			if (k >= 0 && !filled[k]) {
 				next = pos;
 				pos = k;
@@ -343,6 +353,14 @@ uint32_t ra_readargs(const char *tmpl, int32_t *array, struct RDArgs *rd)
 						free(w);
 						it = read_item(&x, &w);
 					}
+					if (it == ITEM_UNQUOTED) {
+						/* where the value began */
+						start = x.pos - strlen(w);
+						if (x.pos <= x.len && x.pos > 0 &&
+						    (x.s[x.pos - 1] == ' ' ||
+						     x.s[x.pos - 1] == '\t'))
+							start--;
+					}
 					if (it != ITEM_QUOTED &&
 					    it != ITEM_UNQUOTED) {
 						free(w);
@@ -353,16 +371,21 @@ uint32_t ra_readargs(const char *tmpl, int32_t *array, struct RDArgs *rd)
 			}
 		}
 		if (t && t->type == T_FULL) {
-			/* the rest of the line, as typed */
+			/* the rest of the line, as typed (a first word in
+			   quotes loses them) */
+			int32_t e = x.pos, from = x.pos;
 			size_t l = strlen(w);
-			int32_t e = x.pos;
 			char *full;
 			while (e < x.len && x.s[e] != '\n')
 				e++;
-			full = malloc(l + (e - x.pos) + 1);
+			if (it == ITEM_UNQUOTED) {
+				from = start;
+				l = 0;
+			}
+			full = malloc(l + (e - from) + 1);
 			memcpy(full, w, l);
-			memcpy(full + l, x.s + x.pos, e - x.pos);
-			full[l + e - x.pos] = 0;
+			memcpy(full + l, x.s + from, e - from);
+			full[l + e - from] = 0;
 			while (l + e - x.pos > 0 &&
 			       (full[strlen(full) - 1] == ' ' ||
 				full[strlen(full) - 1] == '\t'))
