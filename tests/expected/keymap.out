@@ -1,0 +1,22 @@
+keymap.resource 1
+key $10 qual $0: 1 $71
+key $10 qual $1: 1 $51
+key $10 qual $10: 1 $E5
+key $10 qual $11: 1 $51
+key $10 qual $8: 1 $11
+key $10 qual $4: 1 $51
+key $11 qual $0: 3 $61 $62 $63
+key $11 qual $1: 3 $58 $59 $5A
+key $11 qual $10: 3 $61 $62 $63
+key $11 qual $11: 3 $58 $59 $5A
+key $11 qual $8: 3 $61 $62 $63
+key $11 qual $4: 3 $61 $62 $63
+key $12 qual $0: 1 $31
+key $12 qual $1: 1 $21
+key $12 qual $10: 1 $31
+key $12 qual $11: 1 $21
+key $12 qual $8: 1 $31
+key $12 qual $4: 1 $31
+default is it 1
+through the default: 1 $21
+rc=0

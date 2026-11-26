@@ -6,10 +6,16 @@
      tcli internal       run the shell's Echo through FindSegment/RunCommand
      tcli vars           GetVar/SetVar, local and global
      tcli names          utility.library's named objects
+     tcli keymap         MapRawKey through a keymap's tables
      tcli pkt            SendPkt and WaitPkt to a filesystem and the console
      tcli cd             CD through System(), in a directory with "boards"
                          and "devices" (the machine-sysfs board directory) */
 #include "t.h"
+
+/* keymap.library (not in lvo.h) */
+#define LVOSetKeyMapDefault (-30)
+#define LVOAskKeyMapDefault (-36)
+#define LVOMapRawKey (-42)
 
 struct CLI {
 	s32 result2;
@@ -123,6 +129,53 @@ int main(u32 arglen, char *args)
 		call(DOSBase, LVOSetVar, "d1d2d3d4", "afvar", 0, 0, 0x100);
 		n = call(DOSBase, LVOGetVar, "d1d2d3d4", "afvar", buf, 64, 0x100);
 		printf("deleted %ld\n", n);
+		return 0;
+	}
+	if (!strcmp(cmd, "keymap")) {
+		/* a keymap with three keys: 0x10 'q' (vanilla), 0x11 a string
+		   key, 0x12 a key with shift only */
+		static u8 lotypes[64], hitypes[40], locaps[8], lorep[8], hicaps[8], hirep[8];
+		static u32 lomap[64], himap[40];
+		static u8 str[] = { 3, 4, 3, 7, 'a', 'b', 'c', 'X', 'Y', 'Z' };
+		static u32 km[8];
+		void *kb = (void *)call(SysBase, LVOOpenLibrary, "a1d0", "keymap.library", 37);
+		void *rsrc = (void *)call(SysBase, LVOOpenResource, "a1", "keymap.resource");
+		u16 ev[11];
+		char buf[16];
+		int i, q;
+		static const u16 quals[] = { 0, 1, 0x10, 0x11, 8, 4 };
+		for (i = 0; i < 64; i++)
+			lotypes[i] = 0x80;
+		lotypes[0x10] = 7;
+		lomap[0x10] = 'Q' << 24 | 0xe5 << 16 | 'Q' << 8 | 'q';
+		locaps[2] = 1;
+		lotypes[0x11] = 0x41;           /* KCF_STRING | KCF_SHIFT */
+		lomap[0x11] = (u32)str;
+		lotypes[0x12] = 1;
+		lomap[0x12] = '!' << 8 | '1';
+		km[0] = (u32)lotypes; km[1] = (u32)lomap; km[2] = (u32)locaps; km[3] = (u32)lorep;
+		km[4] = (u32)hitypes; km[5] = (u32)himap; km[6] = (u32)hicaps; km[7] = (u32)hirep;
+		printf("keymap.resource %ld\n", rsrc != 0);
+		memset(ev, 0, sizeof(ev));
+		((u8 *)ev)[4] = 1;              /* IECLASS_RAWKEY */
+		for (i = 0x10; i <= 0x12; i++)
+			for (q = 0; q < 6; q++) {
+				s32 n;
+				ev[3] = i;
+				ev[4] = quals[q];
+				n = call(kb, LVOMapRawKey, "a0a1d1a2", ev, buf, 16, km);
+				printf("key $%lx qual $%lx: %ld", (u32)i, (u32)quals[q], n);
+				for (int k = 0; k < n; k++)
+					printf(" $%lx", (u32)(u8)buf[k]);
+				printf("\n");
+			}
+		call(kb, LVOSetKeyMapDefault, "a0", km);
+		printf("default is it %ld\n", call(kb, LVOAskKeyMapDefault, "") == (u32)km);
+		ev[3] = 0x12;
+		ev[4] = 1;
+		i = call(kb, LVOMapRawKey, "a0a1d1a2", ev, buf, 16, 0);
+		printf("through the default: %ld $%lx\n", (s32)i, (u32)(u8)buf[0]);
+		call(SysBase, LVOCloseLibrary, "a1", kb);
 		return 0;
 	}
 	if (!strcmp(cmd, "pkt")) {

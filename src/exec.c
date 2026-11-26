@@ -117,7 +117,7 @@ static void e_RemTail(struct frame *f) { RET(remtail(L(A(0)))); }
 static void e_Enqueue(struct frame *f) { enqueue(L(A(0)), N(A(1))); }
 static void e_FindName(struct frame *f) { RET(findname(N(A(0)), PTR(A(1)))); }
 
-/* resources: the ones programs add */
+/* resources: the ones programs add (and keymap.resource, from console.c) */
 static void e_AddResource(struct frame *f)
 {
 	struct Node *n = N(A(1));
