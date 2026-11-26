@@ -178,6 +178,56 @@ static int emulate_load(greg_t *g)
 	return 1;
 }
 
+/*
+ * AND, OR and CMP <ea>,Dn and TST <ea> reading address 4 or the custom
+ * chips (ShowConfig masks VPOSR with "and.w $dff004,d0").
+ */
+static int emulate_alu_load(greg_t *g)
+{
+	const uint16_t *pc = (const uint16_t *)(uintptr_t)g[R_PC];
+	uint16_t op = pc[0];
+	int smode = (op >> 3) & 7, sreg = op & 7, dreg = (op >> 9) & 7;
+	int kind = op >> 12, opmode = (op >> 6) & 7, n, size;
+	uint32_t ea, v, d, r, mask, msb;
+
+	if ((op & 0xff00) == 0x4a00 && opmode < 3) {    /* tst */
+		kind = 0;
+		size = 1 << opmode;
+	} else if ((kind == 0x8 || kind == 0xb || kind == 0xc) && opmode < 3)
+		size = 1 << opmode;                     /* or, cmp, and */
+	else
+		return 0;
+	n = src_ea(g, pc + 1, smode, sreg, &ea);
+	if (n < 0 || !virt_read(ea, size, &v))
+		return 0;
+	if (smode == 3)
+		*areg(g, sreg) += size;
+	mask = size == 4 ? 0xffffffff : size == 2 ? 0xffff : 0xff;
+	msb = mask ^ (mask >> 1);
+	d = g[R_D0 + dreg] & mask;
+	g[R_PS] &= ~0x0f;                               /* N Z V C; X kept */
+	switch (kind) {
+	case 0x8: r = d | v; break;
+	case 0xc: r = d & v; break;
+	case 0xb:
+		r = (d - v) & mask;
+		if (v > d)
+			g[R_PS] |= 1;                   /* C */
+		if (((d ^ v) & (d ^ r)) & msb)
+			g[R_PS] |= 2;                   /* V */
+		break;
+	default: r = v; break;
+	}
+	if (kind == 0x8 || kind == 0xc)
+		g[R_D0 + dreg] = (g[R_D0 + dreg] & ~mask) | r;
+	if (r & msb)
+		g[R_PS] |= 8;
+	if (!(r & mask))
+		g[R_PS] |= 4;
+	g[R_PC] += 2 + 2 * n;
+	return 1;
+}
+
 /* a MOVE into the custom chips: discarded (CPU writes $DFF004 to see
    whether the bus gives it back) */
 /*
@@ -365,7 +415,8 @@ static void on_fault(int sig, siginfo_t *si, void *ucv)
 
 	if (sig == SIGSEGV && screen_plane_fault((uint32_t)(uintptr_t)si->si_addr))
 		return;         /* a write to a screen's planes: noted, page open */
-	if (sig == SIGSEGV && SysBase && (emulate_load(g) || emulate_store(g)))
+	if (sig == SIGSEGV && SysBase && (emulate_load(g) || emulate_store(g) ||
+					  emulate_alu_load(g)))
 		return;
 	if ((sig == SIGILL || sig == SIGSEGV) && emulate_priv(g))
 		return;
