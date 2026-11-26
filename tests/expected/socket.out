@@ -1,0 +1,39 @@
+listener 0, bind 0, listen 0
+getsockname: len 16, sin_len 16, family 2, port set 1
+connect: in progress
+WaitSelect(write) = 1, ready 1
+WaitSelect(listener) = 1, ready 1
+accept 2: peer is the client 1
+getpeername: the listener 1
+WaitSelect(nothing sent, 200 ms) = 0, ready 0
+send = 5
+WaitSelect(sent) = 1, ready 1, FIONREAD 5
+recv = 5 "hello"
+reply = 6 "world!"
+Dup2Socket = 3, send through it 3, close 0
+the client got "dup"
+second base 1, unique id 1, obtained 0, twice -1
+the server got "obtained" from it; the original still sends 0
+Dup2Socket(-1, 7) = 7, then send -1 errno 38
+SO_TYPE 1
+recv with SO_RCVTIMEO = -1, errno 35
+send(40) = -1, errno 9, Errno() 9
+WaitSelect(signalled) = 0, ready 0, signal back 1
+WaitSelect(no signal, 100 ms) = 0, mask 0
+after shutdown: WaitSelect 1 ready 1, recv 0
+close 0, again -1 errno 9
+gethostbyname(localhost): 1, type 2 len 4, 127.0.0.1 1
+gethostbyaddr(127.0.0.1): a name 1
+gethostbyname(10.2.3.4): $A020304
+getservbyname(telnet): port 23 tcp
+getservbyport(21): ftp
+getprotobyname(udp): 17
+getprotobynumber(6): tcp
+Inet_NtoA: 192.168.3.1
+inet_addr: $C0A80301 $A000001 $FFFFFFFF
+inet_network(10.1) $A01
+NetOf $A LnaOf $203 MakeAddr $C0A80307
+gethostname: 0
+SocketBaseTagList = 0: dtable 64, now 128, ECONNREFUSED "Connection refused"
+tsock: a syslog line: 42, Bad file descriptor
+rc=0

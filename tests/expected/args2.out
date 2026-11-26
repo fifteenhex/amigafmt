@@ -1,0 +1,8 @@
+arglen 49 args [TO dest QUIET "with space" NUM=42 TEXT "q*"uote"]
+FROM[0] = "with space"
+TO = "dest"
+QUIET = -1
+NUM = 42
+TEXT = "q"uote"
+TOG = -1
+rc=0

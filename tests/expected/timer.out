@@ -1,0 +1,12 @@
+nonesuch.device: -1
+DoIO = 0
+DoIO waited 300..800 ms: 1
+CheckIO at once: pending
+Wait got the port signal: 1, 200..700 ms: 1
+GetMsg is the request: 1
+WaitIO after AbortIO: -2
+AddTime: 4.100000
+SubTime: 1.900000
+CmpTime: 1 -1 0
+ReadEClock freq 709379
+rc=0

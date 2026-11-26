@@ -1,0 +1,3 @@
+arglen 17 args [x NUM notanumber]
+ReadArgs: bad number
+rc=10

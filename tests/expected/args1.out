@@ -1,0 +1,7 @@
+arglen 6 args [a b c]
+FROM[0] = "a"
+FROM[1] = "b"
+TO = "c"
+QUIET = 0
+TOG = -1
+rc=0

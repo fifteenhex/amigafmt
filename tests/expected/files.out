@@ -1,0 +1,20 @@
+open ok
+wrote 18
+seek was 18
+read 4 [file]
+case-insensitive open ok
+FGets: hello file
+FGets: line 2
+rename -1
+open missing: no
+a.txt: object not found
+examine: amigafmt-test type 2
+exnext: 101 (files + 100*dirs)
+ExNext end: no more entries in directory
+NameFromLock ends with: :amigafmt-test/sub
+match: b.txt (b.txt)
+match end 232
+delete dir with file: 0
+Delete: directory not empty
+delete dir: -1
+rc=0
