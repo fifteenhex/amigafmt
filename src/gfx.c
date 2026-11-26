@@ -1817,6 +1817,12 @@ static void g_GetRPAttrsA(struct frame *f)
 	}
 }
 
+/* SetChipRev: the chips are the machine's, so ChipRevBits0 is the answer */
+static void g_SetChipRev(struct frame *f)
+{
+	RET(*((uint8_t *)GfxBase + 0xec));
+}
+
 static const struct libimpl gfx_impl[] = {
 	{ "InitRastPort", g_InitRastPort },
 	{ "SetAPen", g_SetAPen }, { "SetBPen", g_SetBPen },
@@ -1859,6 +1865,7 @@ static const struct libimpl gfx_impl[] = {
 	{ "WaitTOF", g_WaitTOF }, { "WaitBlit", g_Nop },
 	{ "OwnBlitter", g_Nop }, { "DisownBlitter", g_Nop },
 	{ "VBeamPos", g_Zero }, { "WaitBOVP", g_Nop },
+	{ "SetChipRev", g_SetChipRev },
 	{ "NewRegion", g_NewRegion }, { "DisposeRegion", g_DisposeRegion },
 	{ "ClearRegion", g_ClearRegion }, { "OrRectRegion", g_OrRectRegion },
 	{ "AndRectRegion", g_AndRectRegion }, { "XorRectRegion", g_OrRectRegion },
