@@ -12,7 +12,7 @@ foreach p : ['hello', 'abs4', 'crash']
                              command: [mkprog, cc_cmd, mkhunk, '@OUTPUT@', '@INPUT@'])}
 endforeach
 foreach p : ['targs', 'tfmt', 'tfiles', 'texec', 'tunimpl', 'tpat', 'tmath',
-             'ttimer', 'tsystem', 'tscreen', 'tasl', 'tsock']
+             'ttimer', 'tsystem', 'tscreen', 'tasl', 'tsock', 'tmachine']
   progs += {p: custom_target(p, input: ['start.S', 'lib.c', p + '.c'], output: p, build_by_default: true,
                              command: [mkprog, cc_cmd, mkhunk, '@OUTPUT@', '@INPUT@'])}
 endforeach
@@ -38,14 +38,25 @@ cases = [
   ['timer', '0', [], 'ttimer', []],
   ['system', '0', [], 'tsystem', []],
   ['socket', '0', [], 'tsock', []],
+  ['machine', '0', [], 'tmachine', []],
+  ['machine-sysfs', '0', [], 'tmachine', []],
 ]
 here = meson.current_build_dir()
+# a board directory with the layout of /sys/bus/zorro, for machine-sysfs
+run_command(find_program('mkzorro.py'), here / 'zorro', check: true)
+
+# environment for a case (the default runs with no config file)
+case_env = {
+  'files': {'AMIGAFMT_CONF': '/dev/null'},
+  'machine-sysfs': {'AMIGAFMT_ZORRO': here / 'zorro'},
+  'machine': {'AMIGAFMT_ZORRO': '5080/148@0xe90000/0x10000,2206/33@0x40000000/0x1000000,2206/0xa1@0x60000000/0x20000000'},
+}
 foreach c : cases
   name = c[0]
   prog = c[3]
   test(name, check,
        args: [files('expected' / name + '.out'), c[1], here, amigafmt.full_path()] + c[2] + ['./' + prog] + c[4],
-       env: name == 'files' ? {'AMIGAFMT_CONF': '/dev/null'} : {},
+       env: case_env.get(name, {}),
        depends: progs.has_key(prog) ? [amigafmt, progs[prog]] : [amigafmt],
        suite: 'programs')
 endforeach

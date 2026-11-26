@@ -333,6 +333,8 @@ static uint32_t movec_read(int rc, greg_t *g)
 	}
 }
 
+static uint32_t in_trap;        /* the stack pointer a task trap's RTE leaves */
+
 static int emulate_priv(greg_t *g)
 {
 	uint16_t *pc = (uint16_t *)(uintptr_t)g[R_PC];
@@ -355,6 +357,10 @@ static int emulate_priv(greg_t *g)
 		g[R_PS] = (g[R_PS] & ~0xff) | s[1];
 		g[R_PC] = (uint32_t)s[2] << 24 | s[3] << 16 | s[4] << 8 | s[5];
 		g[R_SP] += fmt == 2 || fmt == 3 ? 12 : fmt == 4 ? 16 : 8;
+		if (in_trap && g[R_SP] == in_trap) {   /* the end of a trap handler */
+			in_trap = 0;
+			in_supervisor--;
+		}
 		return 1;
 	}
 	case 0x4e7a:                            /* movec rc,rn */
@@ -406,6 +412,43 @@ static int emulate_priv(greg_t *g)
 	return 0;
 }
 
+/*
+ * A task with its own tc_TrapCode gets the processor exceptions, as on
+ * AmigaOS: the handler runs "in supervisor mode" on an exception frame
+ * (format 0) with the trap number pushed above it, and its RTE returns
+ * to the program.  ShowConfig finds out whether there is an MMU this way.
+ */
+static int task_trap(int sig, siginfo_t *si, greg_t *g)
+{
+	struct Task *t = SysBase ? PTR(SysBase->ThisTask) : NULL;
+	uint16_t op = *(uint16_t *)(uintptr_t)g[R_PC];
+	uint32_t vec, *sp;
+	uint16_t *w;
+
+	if (!t || !t->tc_TrapCode || t->tc_TrapCode == SysBase->TaskTrapCode ||
+	    in_trap)
+		return 0;
+	if (sig == SIGILL)
+		vec = si->si_code == ILL_PRVOPC ? 8 : (op >> 12) == 0xf ? 11 :
+		      (op >> 12) == 0xa ? 10 : 4;
+	else if (sig == SIGFPE && si->si_code == FPE_INTDIV)
+		vec = 5;
+	else
+		return 0;
+	sp = (uint32_t *)(uintptr_t)(g[R_SP] - 12);
+	w = (uint16_t *)(sp + 1);
+	w[0] = (g[R_PS] & 0xff) | 0x2000;       /* SR */
+	w[1] = g[R_PC] >> 16;                   /* PC */
+	w[2] = g[R_PC];
+	w[3] = vec * 4;                         /* format 0, vector offset */
+	sp[0] = vec;                            /* the trap number */
+	in_trap = g[R_SP];
+	in_supervisor++;
+	g[R_SP] = (uintptr_t)sp;
+	g[R_PC] = t->tc_TrapCode;
+	return 1;
+}
+
 static void on_fault(int sig, siginfo_t *si, void *ucv)
 {
 	ucontext_t *uc = ucv;
@@ -419,6 +462,8 @@ static void on_fault(int sig, siginfo_t *si, void *ucv)
 					  emulate_alu_load(g)))
 		return;
 	if ((sig == SIGILL || sig == SIGSEGV) && emulate_priv(g))
+		return;
+	if (task_trap(sig, si, g))
 		return;
 	dos_flush_all();
 	fprintf(stderr, "amigafmt: %s: %s at $%08x, address $%08lx", af_progname,

@@ -1,0 +1,18 @@
+board 5080/148 type $C1 flags $0 at $E90000 size $10000
+board 2206/33 type $80 flags $30 at $X size $1000000
+board 2206/161 type $85 flags $30 at $X size $X
+second 2206 board: product 161
+1/1: 0
+added: 1
+removed: 0
+ReadExpansionRom: 1, AllocExpansionMem: -1
+memory "expansion memory" type 10 pri 0 attributes $5 lower-header 64
+memory "chip memory" type 10 pri -10 attributes $303 size $200000 free $180000 lower-header 64
+AvailMem(CHIP|TOTAL) $200000
+VBlankFrequency 60, MaxLocMem $200000
+OpenResource: 1
+after RemResource: 0
+ChipRevBits0 $F, DisplayFlags 1
+VPOSR & $7f00: $3300
+line F: 2, trap 11, vector offset $2C
+rc=0
