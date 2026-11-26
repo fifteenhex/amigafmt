@@ -911,21 +911,23 @@ static void e_CloseDevice(struct frame *f)
 
 /* ---- semaphores (single task: always available) ---- */
 
-static void e_InitSemaphore(struct frame *f)
+/* the node's name and priority are the caller's (AddSemaphore needs them) */
+static void init_semaphore(uint8_t *s)
 {
-	uint8_t *s = PTR(A(0));
-
-	memset(s, 0, 46);
+	memset(s + 14, 0, 46 - 14);
 	((struct Node *)s)->ln_Type = 15;       /* NT_SIGNALSEM */
 	newlist((struct List *)(s + 16));       /* ss_WaitQueue */
+	*(int16_t *)(s + 44) = -1;              /* ss_QueueCount */
 }
+
+static void e_InitSemaphore(struct frame *f) { init_semaphore(PTR(A(0))); }
 
 static void e_AttemptSemaphore(struct frame *f) { RET(1); }
 
 static void e_AddSemaphore(struct frame *f)
 {
-	e_InitSemaphore(f);
-	enqueue(&SysBase->SemaphoreList, N(A(1) ? A(1) : A(0)));
+	init_semaphore(PTR(A(1)));
+	enqueue(&SysBase->SemaphoreList, N(A(1)));
 }
 
 static void e_FindSemaphore(struct frame *f)
