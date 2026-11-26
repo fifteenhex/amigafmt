@@ -117,6 +117,22 @@ static void e_RemTail(struct frame *f) { RET(remtail(L(A(0)))); }
 static void e_Enqueue(struct frame *f) { enqueue(L(A(0)), N(A(1))); }
 static void e_FindName(struct frame *f) { RET(findname(N(A(0)), PTR(A(1)))); }
 
+/* resources: the ones programs add */
+static void e_AddResource(struct frame *f)
+{
+	struct Node *n = N(A(1));
+
+	n->ln_Type = NT_RESOURCE;
+	enqueue(&SysBase->ResourceList, n);
+}
+
+static void e_RemResource(struct frame *f) { remove_node(N(A(1))); }
+
+static void e_OpenResource(struct frame *f)
+{
+	RET(findname(N(APTR_OF(&SysBase->ResourceList)), PTR(A(1))));
+}
+
 /* ---- memory ---- */
 
 static void e_AllocMem(struct frame *f)
@@ -1178,7 +1194,8 @@ static const struct libimpl exec_impl[] = {
 	{ "OpenDevice", e_OpenDevice }, { "CloseDevice", e_CloseDevice },
 	{ "DoIO", io_DoIO }, { "SendIO", io_SendIO }, { "WaitIO", io_WaitIO },
 	{ "CheckIO", io_CheckIO }, { "AbortIO", io_AbortIO },
-	{ "OpenResource", e_Zero },
+	{ "OpenResource", e_OpenResource }, { "AddResource", e_AddResource },
+	{ "RemResource", e_RemResource },
 	{ "InitSemaphore", e_InitSemaphore },
 	{ "ObtainSemaphore", e_Nop }, { "ReleaseSemaphore", e_Nop },
 	{ "AttemptSemaphore", e_AttemptSemaphore },

@@ -43,9 +43,12 @@ struct MinList {
 };
 
 #define NT_TASK      1
+#define NT_DEVICE    3
 #define NT_MSGPORT   4
 #define NT_MESSAGE   5
+#define NT_RESOURCE  8
 #define NT_LIBRARY   9
+#define NT_MEMORY    10
 #define NT_PROCESS   13
 
 struct Library {
