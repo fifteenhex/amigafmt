@@ -268,11 +268,11 @@ static int emulate_store(greg_t *g)
 		ns = size == 4 ? 2 : 1;
 		v = size == 4 ? (uint32_t)pc[1] << 16 | pc[2] : pc[1];
 	} else {
+		/* read once the destination is known to be ours: the fault
+		   may be the source's */
 		ns = src_ea(g, pc + 1, smode, sreg, &sea);
 		if (ns < 0)
 			return 0;
-		v = size == 1 ? *(uint8_t *)(uintptr_t)sea :
-		    size == 2 ? *(uint16_t *)(uintptr_t)sea : *(uint32_t *)(uintptr_t)sea;
 	}
 	a = areg(g, dreg);
 	switch (dmode) {
@@ -294,6 +294,9 @@ static int emulate_store(greg_t *g)
 	}
 	if (ea < 0xdff000 || ea >= 0xdff200)
 		return 0;
+	if (!clr && smode >= 2 && !(smode == 7 && sreg == 4))
+		v = size == 1 ? *(uint8_t *)(uintptr_t)sea :
+		    size == 2 ? *(uint16_t *)(uintptr_t)sea : *(uint32_t *)(uintptr_t)sea;
 	if (!clr && smode == 3)
 		*areg(g, sreg) += size == 1 && sreg == 7 ? 2 : size;
 	if (dmode == 3)
