@@ -72,8 +72,8 @@ static uint16_t custom_read(uint32_t off)
 		return blitter_read(off);
 	}
 	case 0x002: return 0x03f0;              /* DMACONR: the blitter is never busy */
-	case 0x004: return 0x3300;              /* VPOSR: Alice, NTSC */
-	case 0x07c: return 0x00f8;              /* DENISEID: Lisa */
+	case 0x004: return machine_vposr();     /* VPOSR: Agnus/Alice ID */
+	case 0x07c: return machine_deniseid();  /* DENISEID */
 	default: return 0;
 	}
 }
@@ -178,6 +178,56 @@ static int emulate_load(greg_t *g)
 	return 1;
 }
 
+/*
+ * AND, OR and CMP <ea>,Dn and TST <ea> reading address 4 or the custom
+ * chips (ShowConfig masks VPOSR with "and.w $dff004,d0").
+ */
+static int emulate_alu_load(greg_t *g)
+{
+	const uint16_t *pc = (const uint16_t *)(uintptr_t)g[R_PC];
+	uint16_t op = pc[0];
+	int smode = (op >> 3) & 7, sreg = op & 7, dreg = (op >> 9) & 7;
+	int kind = op >> 12, opmode = (op >> 6) & 7, n, size;
+	uint32_t ea, v, d, r, mask, msb;
+
+	if ((op & 0xff00) == 0x4a00 && opmode < 3) {    /* tst */
+		kind = 0;
+		size = 1 << opmode;
+	} else if ((kind == 0x8 || kind == 0xb || kind == 0xc) && opmode < 3)
+		size = 1 << opmode;                     /* or, cmp, and */
+	else
+		return 0;
+	n = src_ea(g, pc + 1, smode, sreg, &ea);
+	if (n < 0 || !virt_read(ea, size, &v))
+		return 0;
+	if (smode == 3)
+		*areg(g, sreg) += size;
+	mask = size == 4 ? 0xffffffff : size == 2 ? 0xffff : 0xff;
+	msb = mask ^ (mask >> 1);
+	d = g[R_D0 + dreg] & mask;
+	g[R_PS] &= ~0x0f;                               /* N Z V C; X kept */
+	switch (kind) {
+	case 0x8: r = d | v; break;
+	case 0xc: r = d & v; break;
+	case 0xb:
+		r = (d - v) & mask;
+		if (v > d)
+			g[R_PS] |= 1;                   /* C */
+		if (((d ^ v) & (d ^ r)) & msb)
+			g[R_PS] |= 2;                   /* V */
+		break;
+	default: r = v; break;
+	}
+	if (kind == 0x8 || kind == 0xc)
+		g[R_D0 + dreg] = (g[R_D0 + dreg] & ~mask) | r;
+	if (r & msb)
+		g[R_PS] |= 8;
+	if (!(r & mask))
+		g[R_PS] |= 4;
+	g[R_PC] += 2 + 2 * n;
+	return 1;
+}
+
 /* a MOVE into the custom chips: discarded (CPU writes $DFF004 to see
    whether the bus gives it back) */
 /*
@@ -218,11 +268,11 @@ static int emulate_store(greg_t *g)
 		ns = size == 4 ? 2 : 1;
 		v = size == 4 ? (uint32_t)pc[1] << 16 | pc[2] : pc[1];
 	} else {
+		/* read once the destination is known to be ours: the fault
+		   may be the source's */
 		ns = src_ea(g, pc + 1, smode, sreg, &sea);
 		if (ns < 0)
 			return 0;
-		v = size == 1 ? *(uint8_t *)(uintptr_t)sea :
-		    size == 2 ? *(uint16_t *)(uintptr_t)sea : *(uint32_t *)(uintptr_t)sea;
 	}
 	a = areg(g, dreg);
 	switch (dmode) {
@@ -244,6 +294,9 @@ static int emulate_store(greg_t *g)
 	}
 	if (ea < 0xdff000 || ea >= 0xdff200)
 		return 0;
+	if (!clr && smode >= 2 && !(smode == 7 && sreg == 4))
+		v = size == 1 ? *(uint8_t *)(uintptr_t)sea :
+		    size == 2 ? *(uint16_t *)(uintptr_t)sea : *(uint32_t *)(uintptr_t)sea;
 	if (!clr && smode == 3)
 		*areg(g, sreg) += size == 1 && sreg == 7 ? 2 : size;
 	if (dmode == 3)
@@ -283,6 +336,8 @@ static uint32_t movec_read(int rc, greg_t *g)
 	}
 }
 
+static uint32_t in_trap;        /* the stack pointer a task trap's RTE leaves */
+
 static int emulate_priv(greg_t *g)
 {
 	uint16_t *pc = (uint16_t *)(uintptr_t)g[R_PC];
@@ -305,6 +360,10 @@ static int emulate_priv(greg_t *g)
 		g[R_PS] = (g[R_PS] & ~0xff) | s[1];
 		g[R_PC] = (uint32_t)s[2] << 24 | s[3] << 16 | s[4] << 8 | s[5];
 		g[R_SP] += fmt == 2 || fmt == 3 ? 12 : fmt == 4 ? 16 : 8;
+		if (in_trap && g[R_SP] == in_trap) {   /* the end of a trap handler */
+			in_trap = 0;
+			in_supervisor--;
+		}
 		return 1;
 	}
 	case 0x4e7a:                            /* movec rc,rn */
@@ -356,6 +415,43 @@ static int emulate_priv(greg_t *g)
 	return 0;
 }
 
+/*
+ * A task with its own tc_TrapCode gets the processor exceptions, as on
+ * AmigaOS: the handler runs "in supervisor mode" on an exception frame
+ * (format 0) with the trap number pushed above it, and its RTE returns
+ * to the program.  ShowConfig finds out whether there is an MMU this way.
+ */
+static int task_trap(int sig, siginfo_t *si, greg_t *g)
+{
+	struct Task *t = SysBase ? PTR(SysBase->ThisTask) : NULL;
+	uint16_t op = *(uint16_t *)(uintptr_t)g[R_PC];
+	uint32_t vec, *sp;
+	uint16_t *w;
+
+	if (!t || !t->tc_TrapCode || t->tc_TrapCode == SysBase->TaskTrapCode ||
+	    in_trap)
+		return 0;
+	if (sig == SIGILL)
+		vec = si->si_code == ILL_PRVOPC ? 8 : (op >> 12) == 0xf ? 11 :
+		      (op >> 12) == 0xa ? 10 : 4;
+	else if (sig == SIGFPE && si->si_code == FPE_INTDIV)
+		vec = 5;
+	else
+		return 0;
+	sp = (uint32_t *)(uintptr_t)(g[R_SP] - 12);
+	w = (uint16_t *)(sp + 1);
+	w[0] = (g[R_PS] & 0xff) | 0x2000;       /* SR */
+	w[1] = g[R_PC] >> 16;                   /* PC */
+	w[2] = g[R_PC];
+	w[3] = vec * 4;                         /* format 0, vector offset */
+	sp[0] = vec;                            /* the trap number */
+	in_trap = g[R_SP];
+	in_supervisor++;
+	g[R_SP] = (uintptr_t)sp;
+	g[R_PC] = t->tc_TrapCode;
+	return 1;
+}
+
 static void on_fault(int sig, siginfo_t *si, void *ucv)
 {
 	ucontext_t *uc = ucv;
@@ -363,12 +459,18 @@ static void on_fault(int sig, siginfo_t *si, void *ucv)
 	uint32_t pc = g[R_PC], off;
 	int h, i;
 
+	if (sig == SIGSEGV && (uint32_t)(uintptr_t)si->si_addr == pc)
+		goto crash;     /* a jump into nowhere: no instruction to decode */
 	if (sig == SIGSEGV && screen_plane_fault((uint32_t)(uintptr_t)si->si_addr))
 		return;         /* a write to a screen's planes: noted, page open */
-	if (sig == SIGSEGV && SysBase && (emulate_load(g) || emulate_store(g)))
+	if (sig == SIGSEGV && SysBase && (emulate_load(g) || emulate_store(g) ||
+					  emulate_alu_load(g)))
 		return;
 	if ((sig == SIGILL || sig == SIGSEGV) && emulate_priv(g))
 		return;
+	if (task_trap(sig, si, g))
+		return;
+crash:
 	dos_flush_all();
 	fprintf(stderr, "amigafmt: %s: %s at $%08x, address $%08lx", af_progname,
 		strsignal(sig), pc, (unsigned long)(uintptr_t)si->si_addr);
@@ -439,7 +541,9 @@ static void usage(void)
 {
 	fprintf(stderr,
 		"usage: amigafmt [options] program [arguments...]\n"
+		"       amigafmt [options] -c command-line [-c command-line...]\n"
 		"  -a NAME=PATH  assign NAME: to a Linux directory or Amiga path\n"
+		"  -c LINE       run LINE through the AmigaOS shell (repeatable)\n"
 		"  -s BYTES      stack size (default 262144)\n"
 		"  -t            trace every library call to stderr\n"
 		"  -u            a leading / is the Linux root, not the parent\n"
@@ -461,10 +565,17 @@ int main(int argc, char **argv)
 	uint8_t *st;
 	uint32_t rc;
 	stack_t ss;
+	char *shell = NULL;
 
 	af_trace = getenv("AMIGAFMT_TRACE") != NULL;
-	while ((c = getopt(argc, argv, "+a:s:tunlh")) != -1) {
+	while ((c = getopt(argc, argv, "+a:c:s:tunlh")) != -1) {
 		switch (c) {
+		case 'c': {
+			size_t n = shell ? strlen(shell) : 0;
+			shell = realloc(shell, n + strlen(optarg) + 2);
+			sprintf(shell + n, "%s\n", optarg);
+			break;
+		}
 		case 'a':
 			if (nap < 64)
 				ap[nap++] = optarg;
@@ -488,9 +599,9 @@ int main(int argc, char **argv)
 			usage();
 		}
 	}
-	if (optind >= argc && !list)
+	if (optind >= argc && !list && !shell)
 		usage();
-	prog = list ? NULL : argv[optind];
+	prog = list ? NULL : shell ? "Shell" : argv[optind];
 	path_init(prog);
 	for (c = 0; c < nap; c++) {
 		char *eq = strchr(ap[c], '=');
@@ -512,8 +623,9 @@ int main(int argc, char **argv)
 		stack = (strtoul(getenv("WBDE_STACK"), NULL, 0) + 3) & ~3u;
 
 	/* a Linux path is what the shell gave us; fall back to Amiga names */
-	lp = access(prog, R_OK) ? path_to_linux(prog, NULL) : strdup(prog);
-	if (!lp || !(the_seg = hunk_load(lp, &err))) {
+	lp = shell ? NULL : access(prog, R_OK) ? path_to_linux(prog, NULL) :
+	     strdup(prog);
+	if (!shell && (!lp || !(the_seg = hunk_load(lp, &err)))) {
 		fprintf(stderr, "amigafmt: %s: cannot load (%s)\n", prog,
 			lp && !access(lp, R_OK) ? "not an AmigaOS executable" :
 			strerror(errno));
@@ -527,7 +639,9 @@ int main(int argc, char **argv)
 		fprintf(stderr, "amigafmt: ExecBase at $%08x, address 4 %s\n",
 			APTR_OF(SysBase), page0 ? "mapped (page 0)" :
 			"emulated (SIGSEGV)");
-	dos_init(argc - optind - 1, argv + optind + 1, prog, the_seg, stack);
+	dos_init(shell ? 0 : argc - optind - 1, argv + optind + 1, prog,
+		 the_seg, stack);
+	shell_init();
 	{
 		extern void task_init(void);
 		task_init();
@@ -555,6 +669,11 @@ int main(int argc, char **argv)
 		setitimer(ITIMER_REAL, &it, NULL);
 	}
 
+	if (shell) {
+		rc = shell_main(shell);
+		dos_flush_all();
+		return (int32_t)rc < 0 || rc > 255 ? 255 : (int)rc;
+	}
 	st = amem_alloc(stack + 64);
 	stack_lo = APTR_OF(st);
 	stack_hi = stack_lo + stack;
@@ -563,12 +682,14 @@ int main(int argc, char **argv)
 	me->pr_StackBase = MKBADDR(stack_hi);
 	sp = (uint32_t *)(st + stack);
 	*--sp = stack;                          /* 4(sp) = stack size */
+	me->pr_ReturnAddr = APTR_OF(sp);        /* where startup code unwinds to */
 	memset(&r, 0, sizeof(r));
 	r.a[7] = APTR_OF(sp);
 	r.d[0] = dos_arglen;
 	r.a[0] = APTR_OF(dos_args);
 	r.a[6] = APTR_OF(SysBase);
 	rc = call_amiga(&r, APTR_OF((uint32_t *)BADDR(the_seg) + 1));
+	rc = shell_after(rc);           /* a script it started (C:Execute) */
 	dos_flush_all();
 	if (af_trace)
 		fprintf(stderr, "amigafmt: %s returned %d\n", af_progname,

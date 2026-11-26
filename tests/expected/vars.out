@@ -1,0 +1,8 @@
+local 5 local
+global only -1
+no memory 0, IoErr 103
+still 5 local
+global 6 global
+truncated 3 glo
+deleted -1
+rc=0

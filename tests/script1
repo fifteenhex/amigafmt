@@ -1,0 +1,8 @@
+Echo one
+Skip end
+Echo skipped
+Lab end
+Echo two
+If NOT EXISTS nonesuch
+  Echo three
+EndIf

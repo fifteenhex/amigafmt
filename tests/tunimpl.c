@@ -4,7 +4,7 @@
 int main(u32 arglen, char *args)
 {
 	printf("before\n");
-	call(DOSBase, -696, "");        /* dos.library MakeDosEntry */
+	call(DOSBase, -930, "");        /* dos.library CliInitNewcli */
 	printf("after (should not appear)\n");
 	return 0;
 }

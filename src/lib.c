@@ -27,7 +27,8 @@ struct amilib *all_libs[] = { &lib_exec, &lib_dos, &lib_utility,
 			      &lib_mathtrans, &lib_timer, &lib_icon, &lib_layers, &lib_console, &lib_asl,
 			      &lib_iffparse, &lib_boopsi, &lib_workbench,
 			      &lib_datatypes, &lib_diskfont, &lib_locale,
-			      &lib_keymap, &lib_input, &lib_bsdsocket, NULL };
+			      &lib_keymap, &lib_input, &lib_bsdsocket,
+			      &lib_expansion, &lib_shellcmd, NULL };
 struct frame *resume_frame;
 int dispatch_all_regs;
 
@@ -148,7 +149,7 @@ struct Library *lib_build(struct amilib *l)
 	cache_flush(mem, neg + sizeof(struct Library) + l->possize
 		    + l->nslots * 12 + 64);
 
-	b->lib_Node.ln_Type = NT_LIBRARY;
+	b->lib_Node.ln_Type = l->device ? NT_DEVICE : NT_LIBRARY;
 	b->lib_Node.ln_Name = APTR_OF(l->name);
 	b->lib_Flags = 6;                       /* LIBF_CHANGED|LIBF_SUMUSED */
 	b->lib_NegSize = neg;

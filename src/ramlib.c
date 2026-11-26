@@ -88,7 +88,8 @@ static int count_functions(const uint8_t *fa)
 
 /* MakeLibrary: d0 = the library, or 0 */
 static uint32_t make_library(struct frame *f, uint32_t vectors, uint32_t structure,
-			     uint32_t init, uint32_t dsize, uint32_t seglist)
+			     uint32_t init, uint32_t dsize, uint32_t seglist,
+			     const uint8_t *rt)
 {
 	int n = count_functions(PTR(vectors));
 	uint32_t neg = (n * 6 + 3) & ~3u;
@@ -104,6 +105,20 @@ static uint32_t make_library(struct frame *f, uint32_t vectors, uint32_t structu
 	make_functions((uint8_t *)lib, PTR(vectors), 0);
 	if (structure)
 		exec_initstruct(PTR(structure), (uint8_t *)lib, 0);
+	if (rt) {
+		/* InitResident fills in what the RomTag says, for libraries
+		   whose init table has no InitStruct table
+		   (LIBS:commodities.library) */
+		if (!lib->lib_Node.ln_Type)
+			lib->lib_Node.ln_Type = rt[12];
+		if (!lib->lib_Node.ln_Name)
+			lib->lib_Node.ln_Name = rd32(rt + 14);
+		if (!lib->lib_Version)
+			lib->lib_Version = rt[11];
+		if (!lib->lib_IdString)
+			lib->lib_IdString = rd32(rt + 18);
+		lib->lib_Flags |= 6;            /* LIBF_SUMUSED | LIBF_CHANGED */
+	}
 	lib->lib_NegSize = neg;
 	lib->lib_PosSize = dsize;
 	if (init) {
@@ -134,7 +149,7 @@ static uint32_t init_resident(struct frame *f, uint8_t *rt, uint32_t seglist)
 	if (rt[10] & RTF_AUTOINIT) {
 		const uint8_t *it = PTR(init);
 		res = make_library(f, rd32(it + 4), rd32(it + 8), rd32(it + 12),
-				   rd32(it), seglist);
+				   rd32(it), seglist, rt);
 		if (res && rt[12] == NT_LIBRARY)
 			add_library(PTR(res));
 		return res;
@@ -277,7 +292,7 @@ int ramlib_close(struct frame *f, struct Library *lib)
 
 void e_MakeLibrary(struct frame *f)
 {
-	RET(make_library(f, A(0), A(1), A(2), D(0), D(1)));
+	RET(make_library(f, A(0), A(1), A(2), D(0), D(1), NULL));
 }
 
 void e_MakeFunctions(struct frame *f)

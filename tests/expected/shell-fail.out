@@ -1,0 +1,5 @@
+one
+arglen 1 args []
+ReadArgs: required argument missing
+targs failed returncode 10
+rc=10

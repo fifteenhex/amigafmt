@@ -4,3 +4,5 @@ option('fd_dir', type: 'string', value: '',
        description: 'directory of AmigaOS .fd files for the fdtab target (amitools\' data/fd)')
 option('ndk_fd_dir', type: 'string', value: '',
        description: 'NDK fd directory; when set, the fdcheck test compares every vector table with it')
+option('sys_dir', type: 'string', value: '',
+       description: 'an AmigaOS SYS: directory; when set, meson test also runs tools/survey.sh over it (suite survey)')

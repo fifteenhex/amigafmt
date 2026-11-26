@@ -117,6 +117,22 @@ static void e_RemTail(struct frame *f) { RET(remtail(L(A(0)))); }
 static void e_Enqueue(struct frame *f) { enqueue(L(A(0)), N(A(1))); }
 static void e_FindName(struct frame *f) { RET(findname(N(A(0)), PTR(A(1)))); }
 
+/* resources: the ones programs add (and keymap.resource, from console.c) */
+static void e_AddResource(struct frame *f)
+{
+	struct Node *n = N(A(1));
+
+	n->ln_Type = NT_RESOURCE;
+	enqueue(&SysBase->ResourceList, n);
+}
+
+static void e_RemResource(struct frame *f) { remove_node(N(A(1))); }
+
+static void e_OpenResource(struct frame *f)
+{
+	RET(findname(N(APTR_OF(&SysBase->ResourceList)), PTR(A(1))));
+}
+
 /* ---- memory ---- */
 
 static void e_AllocMem(struct frame *f)
@@ -154,27 +170,18 @@ static void e_FreeVec(struct frame *f)
 }
 
 /*
- * Linux's free memory as fast RAM, capped at 1 GB so programs that add
- * the figures up in 32 bits stay sane; "chip RAM" is a token 2 MB, of
- * which 1.5 MB free, because nothing here is chip RAM.
+ * The memory list's figures (machine.c): Linux's free memory as fast RAM,
+ * and a token chip RAM, of which three quarters free, because nothing
+ * here is chip RAM.
  */
 static void e_AvailMem(struct frame *f)
 {
-	uint32_t req = D(1), fast, chip;
-	struct sysinfo si;
+	uint32_t req = D(1), fast, chip, chip_total, chip_free, fast_total,
+		fast_free;
 
-	if (req & MEMF_TOTAL) {
-		uint64_t t = 0;
-		if (!sysinfo(&si))
-			t = (uint64_t)si.totalram * si.mem_unit;
-		fast = t > 0x40000000 ? 0x40000000 : (uint32_t)t;
-		chip = 0x200000;
-	} else {
-		fast = amem_avail();
-		if (fast > 0x40000000)
-			fast = 0x40000000;
-		chip = 0x180000;
-	}
+	machine_memfree(&chip_total, &chip_free, &fast_total, &fast_free);
+	fast = req & MEMF_TOTAL ? fast_total : fast_free;
+	chip = req & MEMF_TOTAL ? chip_total : chip_free;
 	RET(req & MEMF_CHIP ? chip : req & MEMF_FAST ? fast :
 	    (req & MEMF_LARGEST) ? fast : chip + fast);
 }
@@ -737,7 +744,17 @@ static void msg_sent(struct MsgPort *p)
 
 static void e_PutMsg(struct frame *f)
 {
-	putmsg(PTR(A(0)), PTR(A(1)));
+	extern int dos_handler_port(APTR p);
+	extern int dos_is_packet(struct Message *m);
+	extern APTR dos_packet_msg(APTR port, struct Message *m);
+	struct Message *m = PTR(A(1));
+
+	/* a packet for one of dos's handlers is answered at once */
+	if (dos_handler_port(A(0)) && dos_is_packet(m)) {
+		msg_sent(PTR(dos_packet_msg(A(0), m)));
+		return;
+	}
+	putmsg(PTR(A(0)), m);
 	msg_sent(PTR(A(0)));
 }
 
@@ -777,6 +794,19 @@ static void e_ReplyMsg(struct frame *f)
 	exec_reply(m);
 	if (port)
 		msg_sent(PTR(port));
+}
+
+static void e_WaitPort(struct frame *f);
+
+/* WaitPort() and GetMsg(), for dos's WaitPkt() */
+struct Message *exec_wait_msg(struct MsgPort *p)
+{
+	struct frame g;
+
+	memset(&g, 0, sizeof(g));
+	g.a[0] = APTR_OF(p);
+	e_WaitPort(&g);
+	return (struct Message *)exec_getmsg(p);
 }
 
 static void e_WaitPort(struct frame *f)
@@ -895,21 +925,23 @@ static void e_CloseDevice(struct frame *f)
 
 /* ---- semaphores (single task: always available) ---- */
 
-static void e_InitSemaphore(struct frame *f)
+/* the node's name and priority are the caller's (AddSemaphore needs them) */
+static void init_semaphore(uint8_t *s)
 {
-	uint8_t *s = PTR(A(0));
-
-	memset(s, 0, 46);
+	memset(s + 14, 0, 46 - 14);
 	((struct Node *)s)->ln_Type = 15;       /* NT_SIGNALSEM */
 	newlist((struct List *)(s + 16));       /* ss_WaitQueue */
+	*(int16_t *)(s + 44) = -1;              /* ss_QueueCount */
 }
+
+static void e_InitSemaphore(struct frame *f) { init_semaphore(PTR(A(0))); }
 
 static void e_AttemptSemaphore(struct frame *f) { RET(1); }
 
 static void e_AddSemaphore(struct frame *f)
 {
-	e_InitSemaphore(f);
-	enqueue(&SysBase->SemaphoreList, N(A(1) ? A(1) : A(0)));
+	init_semaphore(PTR(A(1)));
+	enqueue(&SysBase->SemaphoreList, N(A(1)));
 }
 
 static void e_FindSemaphore(struct frame *f)
@@ -1178,7 +1210,8 @@ static const struct libimpl exec_impl[] = {
 	{ "OpenDevice", e_OpenDevice }, { "CloseDevice", e_CloseDevice },
 	{ "DoIO", io_DoIO }, { "SendIO", io_SendIO }, { "WaitIO", io_WaitIO },
 	{ "CheckIO", io_CheckIO }, { "AbortIO", io_AbortIO },
-	{ "OpenResource", e_Zero },
+	{ "OpenResource", e_OpenResource }, { "AddResource", e_AddResource },
+	{ "RemResource", e_RemResource },
 	{ "InitSemaphore", e_InitSemaphore },
 	{ "ObtainSemaphore", e_Nop }, { "ReleaseSemaphore", e_Nop },
 	{ "AttemptSemaphore", e_AttemptSemaphore },
@@ -1246,6 +1279,10 @@ static void exec_setup(struct Library *b)
 	newlist(&e->TaskWait);
 	newlist(&e->SemaphoreList);
 	e->LibList.lh_Type = NT_LIBRARY;
+	e->MemList.lh_Type = NT_MEMORY;
+	e->ResourceList.lh_Type = NT_RESOURCE;
+	e->DeviceList.lh_Type = NT_DEVICE;
+	e->PortList.lh_Type = NT_MSGPORT;
 	e->AttnFlags = AFF_68010 | AFF_68020;
 	if (cpu >= 68030)
 		e->AttnFlags |= AFF_68030;
@@ -1253,10 +1290,12 @@ static void exec_setup(struct Library *b)
 		e->AttnFlags |= AFF_68040 | AFF_68881 | AFF_68882 | AFF_FPU40;
 	if (cpu >= 68060)
 		e->AttnFlags |= AFF_68060;
-	e->VBlankFrequency = 50;
-	e->PowerSupplyFrequency = 50;
-	e->ex_EClockFrequency = 709379;
-	e->MaxLocMem = 0x200000;
+	machine_init();
+	e->VBlankFrequency = machine.pal ? 50 : 60;
+	e->PowerSupplyFrequency = machine.psfreq;
+	e->ex_EClockFrequency = machine.eclock;
+	e->MaxLocMem = machine.chip_size;
+	machine_memlist(e);
 	e->Quantum = 4;
 }
 
@@ -1288,3 +1327,5 @@ void exec_init(void)
 /* used by dos for NewList-style setup */
 void exec_newlist(void *l) { newlist(l); }
 void exec_addtail(void *l, void *n) { addtail(l, n); }
+void exec_enqueue(void *l, void *n) { enqueue(l, n); }
+void exec_remove(void *n) { remove_node(n); }

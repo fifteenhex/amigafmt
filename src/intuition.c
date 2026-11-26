@@ -2040,6 +2040,9 @@ static const struct libimpl intuition_impl[] = {
 	{ "RemakeDisplay", i_Zero }, { "ViewAddress", i_Zero },
 	{ "CurrentTime", i_CurrentTime }, { "DoubleClick", i_DoubleClick },
 	{ "GetPrefs", i_GetPrefs }, { "GetDefPrefs", i_GetPrefs },
+	/* -576 is SetIPrefs, how IPrefs hands Intuition its settings:
+	   wbde has its own, so they are taken and not used */
+	{ "intuitionPrivate1", i_Zero },
 	{ "SetPrefs", i_Zero },
 	{ "SetPointer", i_SetPointer }, { "ClearPointer", i_ClearPointer },
 	{ "SetWindowPointerA", i_SetWindowPointerA },

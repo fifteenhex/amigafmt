@@ -9,11 +9,13 @@
  * and the buffers behind FGetC/FPutC/FPuts/VFPrintf.
  */
 #include <errno.h>
+#include <setjmp.h>
 #include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <sys/select.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -118,7 +120,7 @@ static const struct { int16_t code; const char *msg; } faults[] = {
 	{ 305, "file not executable" },
 };
 
-static int fault_text(int32_t code, const char *hdr, char *buf, int32_t len)
+int dos_fault_text(int32_t code, const char *hdr, char *buf, int32_t len)
 {
 	const char *m = NULL;
 	char tmp[300], num[32];
@@ -378,7 +380,7 @@ int32_t fh_read(struct afh *a, void *buf, int32_t len)
 	return done;
 }
 
-static void fh_close(BPTR b)
+void dos_close(BPTR b)
 {
 	struct afh *a = fh_priv(b);
 	int i;
@@ -480,7 +482,7 @@ static void d_Close(struct frame *f)
 		RET(DOSTRUE);
 		return;
 	}
-	fh_close(D(1));
+	dos_close(D(1));
 	RET(DOSTRUE);
 }
 
@@ -863,7 +865,7 @@ static void d_SetIoErr(struct frame *f)
 
 static void d_Fault(struct frame *f)
 {
-	RET(fault_text(D(1), PTR(D(2)), PTR(D(3)), D(4)));
+	RET(dos_fault_text(D(1), PTR(D(2)), PTR(D(3)), D(4)));
 }
 
 static void d_PrintFault(struct frame *f)
@@ -873,7 +875,7 @@ static void d_PrintFault(struct frame *f)
 	int32_t code = D(1);
 
 	if (code && a) {
-		fault_text(code, PTR(D(2)), buf, sizeof(buf));
+		dos_fault_text(code, PTR(D(2)), buf, sizeof(buf));
 		for (char *s = buf; *s; s++)
 			fh_putc(a, *s);
 		fh_putc(a, '\n');
@@ -885,9 +887,28 @@ static void d_PrintFault(struct frame *f)
 
 /* ---- process ---- */
 
+/* the RunCommand()s in progress, for Exit() to come back to; tasks
+   interleave on the one list */
+struct runlevel {
+	jmp_buf jb;
+	int32_t rc;
+	uint32_t native_sp;
+	struct frame *resume_frame;
+	int in_supervisor;
+	APTR task;                      /* the task that ran it */
+	struct runlevel *outer;
+};
+static struct runlevel *runlevel;
+
 void dos_exit(int32_t code)
 {
 	dos_flush_all();
+	/* a command the shell runs: this task's innermost RunCommand() */
+	for (struct runlevel *l = runlevel; l; l = l->outer)
+		if (l->task == SysBase->ThisTask) {
+			l->rc = code;
+			longjmp(l->jb, 1);
+		}
 	exit(code < 0 || code > 255 ? 255 : code);
 }
 
@@ -960,6 +981,8 @@ static struct CommandLineInterface *cli(void)
 	return me->pr_CLI ? BADDR(me->pr_CLI) : hidden_cli;
 }
 
+struct CommandLineInterface *dos_cli(void) { return cli(); }
+
 static void d_GetProgramName(struct frame *f)
 {
 	if (!bstr_get(cli()->cli_CommandName, PTR(D(1)), D(2))) {
@@ -1021,167 +1044,10 @@ static void d_GetConsoleTask(struct frame *f) { RET(con_port); }
 static void d_GetFileSysTask(struct frame *f) { RET(fs_port); }
 static void d_SetTask(struct frame *f) { RET(fs_port); }
 
-/*
- * System() and Execute(): no shell, but a command line naming an AmigaOS
- * program is run in this process, the way the shell would: the first
- * word is the command (a path, or looked up in the current directory,
- * then C:), then AmigaDOS redirections (<file, >file, >>file), the rest
- * is its argument line.  A command that is not an AmigaOS executable is
- * handed to the Linux shell (/bin/sh -c), so `System("echo hi")` works.
- */
-static void d_RunCommand(struct frame *f);
-static int bstr_get(BPTR b, char *buf, int32_t len);
-static int bstr_set(BPTR b, const char *s, int max);
-
-static const char *FilePart_c(const char *p)
-{
-	const char *s = strrchr(p, '/');
-
-	if (!s)
-		s = strrchr(p, ':');
-	return s ? s + 1 : p;
-}
-
-static int32_t run_line(struct frame *f, const char *line, BPTR in, BPTR out)
-{
-	char cmd[256], *args, *lp = NULL, *redir_in = NULL, *redir_out = NULL;
-	const char *p = line;
-	int append = 0, err, n = 0;
-	BPTR seg = 0, oin = me->pr_CIS, oout = me->pr_COS, fin = 0, fout = 0;
-	BPTR odir = me->pr_CurrentDir;
-	struct CommandLineInterface *c = cli();
-	char oldname[256];
-	int32_t rc;
-
-	while (*p == ' ' || *p == '\t')
-		p++;
-	if (*p == '"') {
-		for (p++; *p && *p != '"' && n < 255; p++)
-			cmd[n++] = *p;
-		if (*p == '"')
-			p++;
-	} else
-		while (*p && *p != ' ' && *p != '\t' && *p != '\n' && n < 255)
-			cmd[n++] = *p++;
-	cmd[n] = 0;
-	if (!n)
-		return 0;
-	/* redirections, which come right after the command */
-	args = malloc(strlen(p) + 2);
-	args[0] = 0;
-	for (;;) {
-		char tok[256];
-		int k = 0, isin, isout;
-		while (*p == ' ' || *p == '\t')
-			p++;
-		isin = *p == '<';
-		isout = *p == '>';
-		if (!isin && !isout)
-			break;
-		p++;
-		if (isout && *p == '>')
-			append = 1, p++;
-		while (*p == ' ')
-			p++;
-		while (*p && *p != ' ' && *p != '\t' && *p != '\n' && k < 255)
-			tok[k++] = *p++;
-		tok[k] = 0;
-		if (isin)
-			redir_in = strdup(tok);
-		else
-			redir_out = strdup(tok);
-	}
-	sprintf(args, "%s", p);
-	n = strlen(args);
-	while (n && (args[n - 1] == '\n' || args[n - 1] == ' '))
-		args[--n] = 0;
-	strcat(args, "\n");
-
-	if (strchr(cmd, ':') || strchr(cmd, '/'))
-		lp = path_to_linux(cmd, NULL);
-	else {
-		char a[300];
-		struct stat st;
-		lp = path_to_linux(cmd, NULL);
-		if (!lp || stat(lp, &st) || !S_ISREG(st.st_mode)) {
-			free(lp);
-			snprintf(a, sizeof(a), "C:%s", cmd);
-			lp = path_to_linux(a, NULL);
-		}
-	}
-	if (lp)
-		seg = hunk_load(lp, &err);
-	free(lp);
-	if (!seg) {
-		/* not an AmigaOS program: the Linux shell */
-		char *sh = malloc(strlen(line) + 1);
-		dos_flush_all();
-		strcpy(sh, line);
-		n = strlen(sh);
-		while (n && sh[n - 1] == '\n')
-			sh[--n] = 0;
-		rc = system(sh);
-		free(sh);
-		free(args);
-		free(redir_in);
-		free(redir_out);
-		if (rc < 0 || !WIFEXITED(rc))
-			return -1;
-		rc = WEXITSTATUS(rc);
-		return rc == 127 ? -1 : rc;
-	}
-	if (redir_in && !(fin = dos_open(redir_in, MODE_OLDFILE))) {
-		rc = -1;
-		goto out;
-	}
-	if (redir_out && !(fout = dos_open(redir_out, append ?
-					    MODE_READWRITE : MODE_NEWFILE))) {
-		rc = -1;
-		goto out;
-	}
-	if (fout && append) {
-		struct afh *a = fh_priv(fout);
-		lseek(a->wfd, 0, SEEK_END);
-	}
-	me->pr_CIS = fin ? fin : in ? in : oin;
-	me->pr_COS = fout ? fout : out ? out : oout;
-	bstr_get(c->cli_CommandName, oldname, sizeof(oldname));
-	bstr_set(c->cli_CommandName, FilePart_c(cmd), 255);
-	{
-		struct frame g = *f;
-		char *amargs = amem_alloc(strlen(args) + 1);
-		strcpy(amargs, args);
-		g.d[1] = seg;
-		g.d[2] = me->pr_StackSize;
-		g.d[3] = APTR_OF(amargs);
-		g.d[4] = strlen(amargs);
-		d_RunCommand(&g);
-		rc = g.d[0];
-		amem_free(amargs);
-	}
-	bstr_set(c->cli_CommandName, oldname, 255);
-	dos_flush_all();
-	if (me->pr_CurrentDir != odir) {        /* the child's cd is its own */
-		me->pr_CurrentDir = odir;
-		path_set_cwd(lock_path(odir));
-	}
-out:
-	me->pr_CIS = oin;
-	me->pr_COS = oout;
-	if (fin)
-		fh_close(fin);
-	if (fout)
-		fh_close(fout);
-	hunk_unload(seg);
-	free(args);
-	free(redir_in);
-	free(redir_out);
-	return rc;
-}
-
+/* System() and Execute(): the shell (shell.c) */
 static void d_Execute(struct frame *f)
 {
-	int32_t rc = run_line(f, PTR(D(1)), D(2), D(3));
+	int32_t rc = shell_system(PTR(D(1)) ? PTR(D(1)) : "", D(2), D(3), 1);
 
 	RET(rc < 0 ? DOSFALSE : DOSTRUE);
 }
@@ -1208,7 +1074,7 @@ static void d_SystemTagList(struct frame *f)
 		else if (t->ti_Tag == SYS_Output)
 			out = t->ti_Data;
 	}
-	RET(run_line(f, PTR(D(1)), in, out));
+	RET(shell_system(PTR(D(1)), in, out, 0));
 }
 
 static void d_CheckSignal(struct frame *f)
@@ -1246,35 +1112,98 @@ static void d_UnLoadSeg(struct frame *f)
 	RET(DOSTRUE);
 }
 
-static void d_RunCommand(struct frame *f)
+/*
+ * RunCommand: the program on a stack of its own, with its arguments in
+ * a0/d0 and in Input()'s buffer.  Exit() inside it comes back here.
+ */
+
+int32_t dos_runcommand(BPTR seg, uint32_t stack, const char *args,
+		       uint32_t len)
 {
-	BPTR seg = D(1);
-	uint32_t stack = D(2) < 8192 ? 8192 : D(2);
-	uint8_t *st = amem_alloc(stack + 16);
-	uint32_t *sp = (uint32_t *)(st + stack);
+	uint8_t *st;
+	uint32_t *sp;
 	struct regs r;
 	APTR oldargs = me->pr_Arguments;
-	uint32_t res;
+	char *amargs;
+	struct runlevel lv;
+	volatile int32_t res;
+	struct afh *ain;
+	APTR oldret;
+	char *volatile keep = NULL;
+	volatile int keep_len = 0, keep_unget;
 
-	if (!seg || !st) {
-		RET(-1);
-		return;
+	if (stack < 8192)
+		stack = 8192;
+	st = amem_alloc(stack + 16);
+	amargs = amem_alloc(len + 1);
+	if (!seg || !st || !amargs) {
+		amem_free(st);
+		amem_free(amargs);
+		return -1;
 	}
+	memcpy(amargs, args, len);
+	amargs[len] = 0;
+	sp = (uint32_t *)(st + stack);
 	memset(&r, 0, sizeof(r));
 	*--sp = stack;
 	r.a[7] = APTR_OF(sp);
-	r.d[0] = D(4);
-	r.a[0] = D(3);
+	/* pr_ReturnAddr: the stack size, just above the return address
+	   (startup code that leaves through it unwinds to there) */
+	oldret = me->pr_ReturnAddr;
+	me->pr_ReturnAddr = APTR_OF(sp);
+	r.d[0] = len;
+	r.a[0] = APTR_OF(amargs);
 	r.a[6] = APTR_OF(SysBase);
-	me->pr_Arguments = D(3);
-	dos_preload_args(PTR(D(3)), D(4));
-	res = call_amiga(&r, APTR_OF((uint32_t *)BADDR(seg) + 1));
+	me->pr_Arguments = APTR_OF(amargs);
+	/* what is buffered on Input() is the shell's: kept aside while the
+	   argument line takes its place, and put back afterwards */
+	ain = fh_priv(me->pr_CIS);
+	if (ain && ain->rpos < ain->rlen) {
+		keep_len = ain->rlen - ain->rpos;
+		keep = malloc(keep_len);
+		memcpy(keep, ain->rbuf + ain->rpos, keep_len);
+	}
+	keep_unget = ain ? ain->unget : -1;
+	dos_preload_args(amargs, len);
+	lv.native_sp = native_sp;
+	lv.resume_frame = resume_frame;
+	lv.in_supervisor = in_supervisor;
+	lv.task = SysBase->ThisTask;
+	lv.outer = runlevel;
+	runlevel = &lv;
+	if (!setjmp(lv.jb))
+		res = call_amiga(&r, APTR_OF((uint32_t *)BADDR(seg) + 1));
+	else {                                  /* Exit() */
+		native_sp = lv.native_sp;
+		resume_frame = lv.resume_frame;
+		in_supervisor = lv.in_supervisor;
+		res = lv.rc;
+	}
+	/* off the list, wherever other tasks' levels have left it */
+	for (struct runlevel **p = &runlevel; *p; p = &(*p)->outer)
+		if (*p == &lv) {
+			*p = lv.outer;
+			break;
+		}
+	me->pr_ReturnAddr = oldret;
+	if (ain && fh_priv(me->pr_CIS) == ain) {
+		ain->rpos = 0;
+		ain->rlen = keep_len;
+		if (keep_len)
+			memcpy(ain->rbuf, keep, keep_len);
+		ain->unget = keep_unget;
+	}
+	free(keep);
 	me->pr_Arguments = oldargs;
 	amem_free(st);
-	RET(res);
+	amem_free(amargs);
+	return res;
 }
 
-static void d_FindSegment(struct frame *f) { RET(0); }
+static void d_RunCommand(struct frame *f)
+{
+	RET(dos_runcommand(D(1), D(2), PTR(D(3)), D(4)));
+}
 
 /* ---- DOS objects ---- */
 
@@ -1452,133 +1381,198 @@ static void d_StrToLong(struct frame *f)
 	RET(p - s);
 }
 
-/* ---- variables: local and global both map onto the environment ---- */
-
-static void d_GetVar(struct frame *f)
-{
-	const char *v = getenv(PTR(D(1)));
-	char *buf = PTR(D(2));
-	int32_t size = D(3), n;
-
-	if (!v) {
-		char *lp, path[512];
-		FILE *fp;
-		snprintf(path, sizeof(path), "ENV:%s", (char *)PTR(D(1)));
-		lp = path_to_linux(path, NULL);
-		if (lp && !(D(4) & 0x100) && (fp = fopen(lp, "r"))) {
-			n = fread(buf, 1, size > 0 ? size - 1 : 0, fp);
-			fclose(fp);
-			free(lp);
-			while (n && (buf[n - 1] == '\n'))
-				n--;
-			if (size > 0)
-				buf[n] = 0;
-			RET(n);
-			return;
-		}
-		free(lp);
-		dos_set_ioerr(ERROR_OBJECT_NOT_FOUND);
-		RET(-1);
-		return;
-	}
-	n = strlen(v);
-	if (size <= 0) {
-		RET(0);
-		return;
-	}
-	if (n >= size)
-		n = size - 1;
-	memcpy(buf, v, n);
-	buf[n] = 0;
-	RET(n);
-}
-
-static void d_SetVar(struct frame *f)
-{
-	char *val;
-	int32_t size = D(3);
-
-	if (!D(2)) {
-		unsetenv(PTR(D(1)));
-		RET(DOSTRUE);
-		return;
-	}
-	if (size < 0)
-		size = strlen(PTR(D(2)));
-	val = strndup(PTR(D(2)), size);
-	setenv(PTR(D(1)), val, 1);
-	free(val);
-	RET(DOSTRUE);
-}
-
-static void d_DeleteVar(struct frame *f)
-{
-	unsetenv(PTR(D(1)));
-	RET(DOSTRUE);
-}
-
-static void d_FindVar(struct frame *f) { RET(0); }
-
 static void d_ErrorReport(struct frame *f) { RET(DOSTRUE); }
 
 /*
- * DoPkt(): no handlers here, so the few actions programs send to ask
- * questions are answered directly and the rest fail politely.
+ * Packets: no handlers here, so the few actions programs send to ask
+ * questions are answered directly and the rest fail politely.  DoPkt()
+ * asks this, and so does a packet PutMsg()ed to one of the handler
+ * ports (SendPkt() style), which is answered at once.
  */
 #define ACTION_CURRENT_VOLUME 7
+#define ACTION_WAIT_CHAR      20
 #define ACTION_DISK_INFO      25
 #define ACTION_INFO           26
+#define ACTION_SCREEN_MODE    994
+#define ACTION_CHANGE_SIGNAL  995
 #define ACTION_IS_FILESYSTEM  1027
 
-static void d_DoPkt(struct frame *f)
+static int console_raw(int raw);
+
+/*
+ * The console's IOStdReq and ConUnit, as a console window has them: what
+ * programs (Utilities/More) read for the size of the window in
+ * characters.  The size is the terminal's; topaz 8 cells.
+ */
+static uint8_t *console_ioreq(void)
+{
+	static uint8_t *io, *unit;
+	struct winsize ws;
+	int cols = 80, rows = 24, i;
+
+	if (!io) {
+		io = amem_alloc(48);
+		unit = amem_alloc(296);
+		*(APTR *)(io + 20) = APTR_OF(lib_build(&lib_console));
+		*(APTR *)(io + 24) = APTR_OF(unit);     /* io_Unit */
+		for (i = 0; i < 80; i++)                /* cu_TabStops */
+			*(uint16_t *)(unit + 98 + 2 * i) = i * 8;
+	}
+	if ((!ioctl(1, TIOCGWINSZ, &ws) || !ioctl(0, TIOCGWINSZ, &ws)) &&
+	    ws.ws_row && ws.ws_col) {
+		cols = ws.ws_col;
+		rows = ws.ws_row;
+	}
+	*(int16_t *)(unit + 42) = cols - 1;             /* cu_XMax */
+	*(int16_t *)(unit + 44) = rows - 1;             /* cu_YMax */
+	*(int16_t *)(unit + 46) = 8;                    /* cu_XRSize */
+	*(int16_t *)(unit + 48) = 8;                    /* cu_YRSize */
+	*(int16_t *)(unit + 54) = cols * 8 - 1;         /* cu_XRExtant */
+	*(int16_t *)(unit + 56) = rows * 8 - 1;         /* cu_YRExtant */
+	return io;
+}
+
+int32_t dos_packet(APTR port, int32_t type, const int32_t *arg, int32_t *res2)
 {
 	extern int lock_info(BPTR lock, struct InfoData *id);
 	extern int path_info(const char *lpath, struct InfoData *id);
 	extern const char *port_path(APTR port);
-	const char *vp = port_path(D(1));
+	const char *vp = port_path(port);
 
-	if (D(1) == APTR_OF(con_port)) {
-		/* the console: DISK_INFO is how programs find its window
-		   (id_VolumeNode); there is none */
-		if (D(2) == ACTION_DISK_INFO) {
-			struct InfoData *id = BADDR(D(3));
+	*res2 = 0;
+	if (port == APTR_OF(con_port)) {
+		switch (type) {
+		case ACTION_DISK_INFO: {
+			/* how programs find the console's window
+			   (id_VolumeNode): there is none; and its unit
+			   (id_InUse, an IOStdReq) */
+			struct InfoData *id = BADDR(arg[0]);
 			memset(id, 0, sizeof(*id));
 			id->id_DiskType = 0x434f4e00;   /* ID_CON */
 			id->id_DiskState = 82;
-			D(1) = 0;
-			RET(DOSTRUE);
-			return;
+			id->id_InUse = APTR_OF(console_ioreq());
+			return DOSTRUE;
 		}
-		if (D(2) == ACTION_IS_FILESYSTEM) {
-			D(1) = 0;
-			RET(DOSFALSE);
-			return;
+		case ACTION_IS_FILESYSTEM:
+			return DOSFALSE;
+		case ACTION_SCREEN_MODE:
+			return console_raw(arg[0] != 0) ? DOSTRUE : DOSFALSE;
+		case ACTION_CHANGE_SIGNAL:
+			*res2 = 0;
+			return DOSTRUE;
+		case ACTION_WAIT_CHAR: {
+			struct afh *a = fh_priv(me->pr_CIS);
+			fd_set fs;
+			struct timeval tv;
+			if (a && (a->unget >= 0 || a->rpos < a->rlen))
+				return DOSTRUE;
+			dos_flush_all();
+			FD_ZERO(&fs);
+			FD_SET(0, &fs);
+			tv.tv_sec = (uint32_t)arg[0] / 1000000;
+			tv.tv_usec = (uint32_t)arg[0] % 1000000;
+			return select(1, &fs, NULL, NULL, &tv) > 0 ? DOSTRUE : DOSFALSE;
+		}
 		}
 	}
-	switch (D(2)) {
+	switch (type) {
 	case ACTION_IS_FILESYSTEM:
-		D(1) = 0;
-		RET(DOSTRUE);
-		return;
+		return DOSTRUE;
 	case ACTION_DISK_INFO:
 		if (vp)
-			path_info(vp, BADDR(D(3)));
+			path_info(vp, BADDR(arg[0]));
 		else
-			lock_info(0, BADDR(D(3)));
-		D(1) = 0;
-		RET(DOSTRUE);
-		return;
+			lock_info(0, BADDR(arg[0]));
+		return DOSTRUE;
 	case ACTION_INFO:
-		lock_info(D(3), BADDR(D(4)));
-		D(1) = 0;
-		RET(DOSTRUE);
-		return;
+		lock_info(arg[0], BADDR(arg[1]));
+		return DOSTRUE;
 	}
 	if (af_trace)
-		af_warn("DoPkt action %d refused", (int)D(2));
-	dos_set_ioerr(ERROR_ACTION_NOT_KNOWN);
-	D(1) = ERROR_ACTION_NOT_KNOWN;
-	RET(DOSFALSE);
+		af_warn("packet type %d refused", (int)type);
+	*res2 = ERROR_ACTION_NOT_KNOWN;
+	return DOSFALSE;
+}
+
+static void d_DoPkt(struct frame *f)
+{
+	int32_t arg[5] = { D(3), D(4), D(5), D(6), D(7) }, res2;
+	int32_t r = dos_packet(D(1), D(2), arg, &res2);
+
+	dos_set_ioerr(res2);
+	D(1) = res2;
+	RET(r);
+}
+
+/* is p a port packets can be sent to (a handler's)? */
+int dos_handler_port(APTR p)
+{
+	extern const char *port_path(APTR port);
+
+	return p && (p == APTR_OF(con_port) || p == APTR_OF(fs_port) ||
+		     port_path(p));
+}
+
+/* is m a DOS packet: ln_Name points at a DosPacket whose dp_Link is m.
+   A message's name is a string, which may end at the edge of what is
+   mapped, so the longword is read only when mincore() says it can be */
+int dos_is_packet(struct Message *m)
+{
+	uintptr_t a = (uintptr_t)m->mn_Node.ln_Name, pg = sysconf(_SC_PAGESIZE);
+	unsigned char v[2];
+
+	if (!a || (a & 1) ||
+	    mincore((void *)(a & ~(pg - 1)), (a & (pg - 1)) + 4, v))
+		return 0;
+	return *(uint32_t *)a == APTR_OF(m);
+}
+
+/* a packet PutMsg()ed to a handler port: answered and returned to
+   its reply port, which is what this returns */
+APTR dos_packet_msg(APTR port, struct Message *m)
+{
+	int32_t *dp = PTR(m->mn_Node.ln_Name);  /* struct DosPacket */
+	APTR reply = dp[1];
+
+	dp[3] = dos_packet(port, dp[2], dp + 5, &dp[4]);
+	dp[1] = port;                           /* dp_Port: the handler's */
+	exec_putmsg(PTR(reply), m);
+	return reply;
+}
+
+APTR dos_fs_port(void) { return APTR_OF(fs_port); }
+
+/* SendPkt, WaitPkt, ReplyPkt: packets as messages (dp_Link) */
+static void d_SendPkt(struct frame *f)
+{
+	int32_t *dp = PTR(D(1));
+	struct Message *m = PTR(dp[0]);
+
+	m->mn_Node.ln_Name = D(1);
+	dp[1] = D(3);                           /* dp_Port: the reply port */
+	if (dos_handler_port(D(2)))
+		dos_packet_msg(D(2), m);
+	else
+		exec_putmsg(PTR(D(2)), m);
+}
+
+static void d_WaitPkt(struct frame *f)
+{
+	extern struct Message *exec_wait_msg(struct MsgPort *p);
+	struct Message *m = exec_wait_msg(&me->pr_MsgPort);
+
+	RET(m ? m->mn_Node.ln_Name : 0);
+}
+
+static void d_ReplyPkt(struct frame *f)
+{
+	int32_t *dp = PTR(D(1));
+	APTR to = dp[1];
+
+	dp[3] = D(2);
+	dp[4] = D(3);
+	dp[1] = APTR_OF(&me->pr_MsgPort);
+	exec_putmsg(PTR(to), PTR(dp[0]));
 }
 
 /* SetMode(fh, 1): a raw console, as termios non-canonical, no echo */
@@ -1591,40 +1585,49 @@ static void restore_tio(void)
 		tcsetattr(tio_saved, TCSANOW, &saved_tio);
 }
 
-static void d_SetMode(struct frame *f)
+static int set_raw(int fd, int raw)
 {
-	struct afh *a = fh_priv(D(1));
 	struct termios t;
-	int fd = a ? a->rfd : -1;
 
-	if (fd < 0 || !isatty(fd) || tcgetattr(fd, &t)) {
-		RET(DOSFALSE);
-		return;
-	}
+	if (fd < 0 || !isatty(fd) || tcgetattr(fd, &t))
+		return 0;
 	if (tio_saved < 0) {
 		saved_tio = t;
 		tio_saved = fd;
 		atexit(restore_tio);
 	}
-	if (D(2)) {
+	if (raw) {
 		t.c_lflag &= ~(ICANON | ECHO);
 		t.c_cc[VMIN] = 1;
 		t.c_cc[VTIME] = 0;
 	} else
 		t = saved_tio;
 	tcsetattr(fd, TCSANOW, &t);
-	RET(DOSTRUE);
+	return 1;
+}
+
+static int console_raw(int raw)
+{
+	return set_raw(0, raw);
+}
+
+static void d_SetMode(struct frame *f)
+{
+	struct afh *a = fh_priv(D(1));
+
+	RET(set_raw(a ? a->rfd : -1, D(2)) ? DOSTRUE : DOSFALSE);
 }
 
 static void d_DosGetString(struct frame *f)
 {
 	static char buf[128];
 
-	fault_text(D(1), NULL, buf, sizeof(buf));
+	dos_fault_text(D(1), NULL, buf, sizeof(buf));
 	RET(buf);
 }
 
 static void d_Zero(struct frame *f) { RET(0); }
+static void d_Nop0(struct frame *f) { (void)f; }
 static void d_True(struct frame *f) { RET(DOSTRUE); }
 
 static void d_NotImpl(struct frame *f)
@@ -1713,6 +1716,7 @@ static struct Process *new_process(const char *name, int pri, uint32_t entry, ui
 	uint32_t *sp;
 	struct TagItem *t = tags, *x;
 	BPTR in = me->pr_CIS, out = me->pr_COS, err = me->pr_CES;
+	int curdir = 0, homedir = 0;
 
 	strcpy(nm, name);
 	p->pr_Task.tc_Node.ln_Type = NT_PROCESS;
@@ -1725,8 +1729,6 @@ static struct Process *new_process(const char *name, int pri, uint32_t entry, ui
 	p->pr_MsgPort.mp_SigTask = APTR_OF(p);
 	exec_newlist(&p->pr_MsgPort.mp_MsgList);
 	exec_newlist((struct List *)&p->pr_LocalVars);
-	p->pr_CurrentDir = me->pr_CurrentDir;
-	p->pr_HomeDir = me->pr_HomeDir;
 	p->pr_ConsoleTask = me->pr_ConsoleTask;
 	p->pr_FileSystemTask = me->pr_FileSystemTask;
 	p->pr_WindowPtr = me->pr_WindowPtr;
@@ -1737,10 +1739,10 @@ static struct Process *new_process(const char *name, int pri, uint32_t entry, ui
 		case 4: in = x->ti_Data; break;
 		case 5: out = x->ti_Data; break;
 		case 8: err = x->ti_Data; break;
-		case 10: p->pr_CurrentDir = x->ti_Data; break;
+		case 10: p->pr_CurrentDir = x->ti_Data; curdir = 1; break;
 		case 14: p->pr_ConsoleTask = x->ti_Data; break;
 		case 15: p->pr_WindowPtr = x->ti_Data; break;
-		case 16: p->pr_HomeDir = x->ti_Data; break;
+		case 16: p->pr_HomeDir = x->ti_Data; homedir = 1; break;
 		case 21: p->pr_Arguments = x->ti_Data; break;
 		case 24: p->pr_ExitCode = x->ti_Data; break;
 		case 25: p->pr_ExitData = x->ti_Data; break;
@@ -1749,6 +1751,13 @@ static struct Process *new_process(const char *name, int pri, uint32_t entry, ui
 	p->pr_CIS = in;
 	p->pr_COS = out;
 	p->pr_CES = err;
+	/* the current and home directories are copies of the caller's, which
+	   the new process may unlock (NP_CurrentDir and NP_HomeDir give it
+	   locks of its own) */
+	if (!curdir && me->pr_CurrentDir)
+		p->pr_CurrentDir = lock_new(lock_path(me->pr_CurrentDir), SHARED_LOCK);
+	if (!homedir && me->pr_HomeDir)
+		p->pr_HomeDir = lock_new(lock_path(me->pr_HomeDir), SHARED_LOCK);
 	if (stack < 4096)
 		stack = 4096;
 	st = amem_alloc(stack + 64);
@@ -1819,7 +1828,6 @@ const struct libimpl dos_impl_io[] = {
 	{ "DosGetString", d_DosGetString },
 	{ "LockRecord", d_True }, { "LockRecords", d_True },
 	{ "UnLockRecord", d_True }, { "UnLockRecords", d_True },
-	{ "AddSegment", d_Zero }, { "RemSegment", d_Zero },
 	{ "Exit", d_Exit }, { "Delay", d_Delay }, { "DateStamp", d_DateStamp },
 	{ "Cli", d_Cli }, { "GetArgStr", d_GetArgStr },
 	{ "SetArgStr", d_SetArgStr },
@@ -1838,14 +1846,11 @@ const struct libimpl dos_impl_io[] = {
 	{ "CheckSignal", d_CheckSignal },
 	{ "LoadSeg", d_LoadSeg }, { "NewLoadSeg", d_LoadSeg },
 	{ "UnLoadSeg", d_UnLoadSeg }, { "RunCommand", d_RunCommand },
-	{ "FindSegment", d_FindSegment },
 	{ "AllocDosObject", d_AllocDosObject },
 	{ "FreeDosObject", d_FreeDosObject },
 	{ "FilePart", d_FilePart }, { "PathPart", d_PathPart },
 	{ "AddPart", d_AddPart }, { "SplitName", d_SplitName },
 	{ "StrToLong", d_StrToLong },
-	{ "GetVar", d_GetVar }, { "SetVar", d_SetVar },
-	{ "DeleteVar", d_DeleteVar }, { "FindVar", d_FindVar },
 	{ "ReadArgs", d_ReadArgs }, { "FreeArgs", d_FreeArgs },
 	{ "ReadItem", d_ReadItem }, { "FindArg", d_FindArg },
 	{ "ParsePattern", d_ParsePattern },
@@ -1854,6 +1859,8 @@ const struct libimpl dos_impl_io[] = {
 	{ "MatchPatternNoCase", d_MatchPatternNoCase },
 	{ "IsFileSystem", d_True },
 	{ "StartNotify", d_NotImpl }, { "EndNotify", d_Zero },
+	{ "SendPkt", d_SendPkt }, { "WaitPkt", d_WaitPkt },
+	{ "ReplyPkt", d_ReplyPkt }, { "AbortPkt", d_Nop0 },
 	{ "AddBuffers", d_NotImpl }, { "Inhibit", d_NotImpl },
 	{ "Relabel", d_NotImpl }, { "Format", d_NotImpl },
 	{ NULL, NULL }
@@ -1873,6 +1880,15 @@ static BPTR bstr_new(const char *s, int room)
 	return MKBADDR(b);
 }
 
+static uint32_t *dosinfo;
+
+/* DosInfo's di_ResList: the head of the resident list (shell.c) */
+void dos_set_reslist(BPTR head)
+{
+	if (dosinfo)
+		dosinfo[0] = head;
+}
+
 static void dos_setup(struct Library *b)
 {
 	struct DosLibrary *d = (struct DosLibrary *)b;
@@ -1880,6 +1896,8 @@ static void dos_setup(struct Library *b)
 
 	DOSBase = d;
 	d->dl_Root = APTR_OF(rn);
+	dosinfo = amem_alloc(160);              /* struct DosInfo */
+	rn->rn_Info = MKBADDR(dosinfo);
 	date_now(&rn->rn_Time);
 	exec_newlist(&rn->rn_CliList);
 	d->dl_UtilityBase = APTR_OF(lib_build(&lib_utility));
@@ -1892,7 +1910,8 @@ static void dos_setup(struct Library *b)
 	exec_newlist(&con_port->mp_MsgList);
 }
 
-extern const struct libimpl dos_impl_lock[], dos_impl_date[];
+extern const struct libimpl dos_impl_lock[], dos_impl_date[], dos_impl_var[],
+	dos_impl_shell[];
 static struct libimpl dos_impl[256];
 
 struct amilib lib_dos = {
@@ -1911,6 +1930,10 @@ __attribute__((constructor)) static void dos_merge_impl(void)
 	for (const struct libimpl *i = dos_impl_lock; i->name; i++)
 		dos_impl[n++] = *i;
 	for (const struct libimpl *i = dos_impl_date; i->name; i++)
+		dos_impl[n++] = *i;
+	for (const struct libimpl *i = dos_impl_var; i->name; i++)
+		dos_impl[n++] = *i;
+	for (const struct libimpl *i = dos_impl_shell; i->name; i++)
 		dos_impl[n++] = *i;
 }
 

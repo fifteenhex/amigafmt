@@ -116,7 +116,7 @@ BPTR lock_new(const char *lpath, int32_t mode)
 	return MKBADDR(l);
 }
 
-static void lock_free(BPTR b)
+void lock_free(BPTR b)
 {
 	struct alock *l = AL(b);
 
@@ -920,10 +920,22 @@ static void d_GetDeviceProc(struct frame *f)
 {
 	const char *n = PTR(D(1));
 	const char *c = strchr(n, ':');
-	uint32_t *dp = amem_alloc(16);
+	uint32_t *dp, *old = PTR(D(2));
 	char dev[256], *lp;
 
-	dp[0] = APTR_OF(DOSBase);       /* any non-zero port */
+	if (old) {
+		/* the next directory of a multi-directory assign: an assign
+		   has only one here */
+		if (old[2] & 1)
+			lock_free(old[1]);
+		amem_free(old);
+		dos_set_ioerr(ERROR_NO_MORE_ENTRIES);
+		RET(0);
+		return;
+	}
+	dp = amem_alloc(16);
+
+	dp[0] = dos_fs_port();          /* packets to it are answered */
 	if (c) {
 		snprintf(dev, sizeof(dev), "%.*s:", (int)(c - n), n);
 		lp = path_to_linux(dev, "/");
@@ -936,7 +948,9 @@ static void d_GetDeviceProc(struct frame *f)
 		dp[1] = lock_new(lp, SHARED_LOCK);
 		dp[2] = 1;              /* DVPF_UNLOCK */
 		free(lp);
-	}
+	} else
+		dp[1] = me->pr_CurrentDir;      /* a relative name: the current
+						   directory, which stays */
 	RET(dp);
 }
 
@@ -953,11 +967,171 @@ static void d_FreeDeviceProc(struct frame *f)
 
 static void d_DeviceProc(struct frame *f)
 {
-	RET(APTR_OF(DOSBase));
+	RET(dos_fs_port());
 	dos_set_ioerr(0);
 }
 
-static void d_AssignNotImpl(struct frame *f)
+/*
+ * Assigns made while the program runs (C:Assign, a script's assigns):
+ * path.c's table, and a DOS list entry so that they are listed.  One
+ * directory each: AssignAdd() only makes a new one.
+ */
+static int dl_find_assign(const char *name)
+{
+	size_t l = strlen(name);
+	int i;
+
+	if (l && name[l - 1] == ':')
+		l--;
+	dl_build();
+	for (i = 0; i < dl_count; i++) {
+		int32_t t = *(int32_t *)(dl_head[i].node + 4);
+		if ((t == 1 || t == 3 || t == 4) && dl_head[i].name[0] == l &&
+		    !strncasecmp((char *)dl_head[i].name + 1, name, l))
+			return i;
+	}
+	return -1;
+}
+
+static void dl_remove(int i)
+{
+	*(int32_t *)(dl_head[i].node + 4) = -1;         /* skipped */
+	dl_head[i].name[0] = 0;
+	if (i)
+		*(BPTR *)dl_head[i - 1].node = *(BPTR *)dl_head[i].node;
+}
+
+static struct dlent *dl_assign(const char *name, int32_t type)
+{
+	char n[32];
+	size_t l = strlen(name);
+	int i = dl_find_assign(name);
+
+	if (l && name[l - 1] == ':')
+		l--;
+	if (l >= sizeof(n))
+		l = sizeof(n) - 1;
+	memcpy(n, name, l);
+	n[l] = 0;
+	if (i >= 0) {
+		BPTR old = *(BPTR *)(dl_head[i].node + 12);
+		if (old)
+			lock_free(old);
+		*(BPTR *)(dl_head[i].node + 12) = 0;
+		*(int32_t *)(dl_head[i].node + 4) = type;
+		return &dl_head[i];
+	}
+	if (dl_count == 64)
+		return NULL;
+	return dl_add(n, type);
+}
+
+static void d_AssignLock(struct frame *f)
+{
+	const char *name = PTR(D(1));
+	struct dlent *e;
+	int i;
+
+	if (!D(2)) {                            /* remove it */
+		i = dl_find_assign(name);
+		if (!path_unassign(name) && i < 0) {
+			dos_set_ioerr(ERROR_OBJECT_NOT_FOUND);
+			RET(DOSFALSE);
+			return;
+		}
+		if (i >= 0)
+			dl_remove(i);
+		RET(DOSTRUE);
+		return;
+	}
+	path_assign_dir(name, lock_path(D(2)));
+	e = dl_assign(name, 1);                 /* DLT_DIRECTORY */
+	if (e)
+		*(BPTR *)(e->node + 12) = D(2);         /* the lock is ours now */
+	RET(DOSTRUE);
+}
+
+/* AssignLate and AssignPath: the target stays a path */
+static void assign_path(struct frame *f, int32_t type)
+{
+	const char *path = PTR(D(2));
+	struct dlent *e;
+	char *copy;
+
+	path_assign_dir(PTR(D(1)), path);
+	e = dl_assign(PTR(D(1)), type);
+	if (e) {
+		copy = amem_alloc(strlen(path) + 1);
+		strcpy(copy, path);
+		*(APTR *)(e->node + 16) = APTR_OF(copy);   /* dol_AssignName */
+	}
+	RET(DOSTRUE);
+}
+
+static void d_AssignLate(struct frame *f) { assign_path(f, 3); }
+static void d_AssignPath(struct frame *f) { assign_path(f, 4); }
+
+static void d_AssignAdd(struct frame *f)
+{
+	if (dl_find_assign(PTR(D(1))) >= 0) {
+		dos_set_ioerr(ERROR_OBJECT_EXISTS);
+		RET(DOSFALSE);
+		return;
+	}
+	d_AssignLock(f);
+}
+
+static void d_RemAssignList(struct frame *f)
+{
+	int i = dl_find_assign(PTR(D(1)));
+	BPTR l;
+
+	if (i < 0) {
+		RET(DOSFALSE);
+		return;
+	}
+	l = *(BPTR *)(dl_head[i].node + 12);
+	if (l && D(2) && strcmp(lock_path(l), lock_path(D(2)))) {
+		RET(DOSFALSE);
+		return;
+	}
+	path_unassign(PTR(D(1)));
+	dl_remove(i);
+	RET(DOSTRUE);
+}
+
+/*
+ * DOS list entries a program makes (C:Mount): built and freed, never
+ * added, because a device needs a handler to run it and there are none
+ * here.  AddDosEntry() refuses with ERROR_NOT_IMPLEMENTED.
+ */
+static void d_MakeDosEntry(struct frame *f)
+{
+	const char *name = PTR(D(1));
+	size_t n = strlen(name);
+	uint8_t *dl = amem_alloc(44 + n + 2);
+
+	if (!dl) {
+		dos_set_ioerr(ERROR_NO_FREE_STORE);
+		RET(0);
+		return;
+	}
+	if (n > 255)
+		n = 255;
+	*(int32_t *)(dl + 4) = D(2);                    /* dol_Type */
+	dl[44] = n;
+	memcpy(dl + 45, name, n);
+	*(BPTR *)(dl + 40) = MKBADDR(dl + 44);          /* dol_Name */
+	RET(dl);
+}
+
+static void d_FreeDosEntry(struct frame *f)
+{
+	if (D(1))
+		amem_free(PTR(D(1)));
+}
+
+static void d_AddDosEntry(struct frame *f)
 {
 	dos_set_ioerr(ERROR_NOT_IMPLEMENTED);
 	RET(DOSFALSE);
@@ -1314,14 +1488,16 @@ const struct libimpl dos_impl_lock[] = {
 	{ "ChangeMode", d_True },
 	{ "LockDosList", d_LockDosList },
 	{ "AttemptLockDosList", d_LockDosList },
+	{ "MakeDosEntry", d_MakeDosEntry }, { "FreeDosEntry", d_FreeDosEntry },
+	{ "AddDosEntry", d_AddDosEntry }, { "RemDosEntry", d_AddDosEntry },
 	{ "UnLockDosList", d_UnLockDosList },
 	{ "NextDosEntry", d_NextDosEntry }, { "FindDosEntry", d_FindDosEntry },
 	{ "GetDeviceProc", d_GetDeviceProc },
 	{ "FreeDeviceProc", d_FreeDeviceProc },
 	{ "DeviceProc", d_DeviceProc },
-	{ "AssignLock", d_AssignNotImpl }, { "AssignLate", d_AssignNotImpl },
-	{ "AssignPath", d_AssignNotImpl }, { "AssignAdd", d_AssignNotImpl },
-	{ "RemAssignList", d_AssignNotImpl },
+	{ "AssignLock", d_AssignLock }, { "AssignLate", d_AssignLate },
+	{ "AssignPath", d_AssignPath }, { "AssignAdd", d_AssignAdd },
+	{ "RemAssignList", d_RemAssignList },
 	{ "MatchFirst", d_MatchFirst }, { "MatchNext", d_MatchNext },
 	{ "MatchEnd", d_MatchEnd },
 	{ NULL, NULL }

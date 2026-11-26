@@ -561,6 +561,11 @@ static int run(uint8_t *r, uint32_t tags)
 	const char *neg = PTR(tag2(tags, t0, ASL_TB + 19, APTR_OF("Cancel")));
 	int iw = 8 + LW + 26, ih, i;
 
+	if (gui_connect()) {            /* the requester's size needs topaz */
+		af_warn("%s: no wbde to open a requester on (WBDE_SOCKET)",
+			af_progname);
+		return 0;
+	}
 	memset(&q, 0, sizeof(q));
 	q.type = type;
 	q.lastrow = -1;

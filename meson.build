@@ -33,13 +33,14 @@ threads = dependency('threads')
 srcs = files(
   'src/main.c', 'src/lib.c', 'src/hunk.c', 'src/amem.c', 'src/path.c',
   'src/exec.c', 'src/fmt.c', 'src/dos.c', 'src/lock.c', 'src/readargs.c',
-  'src/pattern.c', 'src/date.c', 'src/utility.c', 'src/intuition.c',
+  'src/pattern.c', 'src/date.c', 'src/var.c', 'src/shell.c', 'src/utility.c', 'src/intuition.c',
   'src/gfx.c', 'src/gui.c', 'src/gadtools.c', 'src/icon.c', 'src/console.c',
   'src/iffparse.c', 'src/boopsi.c', 'src/asl.c', 'src/math.c', 'src/timer.c',
   'src/diskfont.c', 'src/ramlib.c', 'src/locale.c', 'src/task.c',
   'src/screen.c', 'src/blitter.c', 'src/bsdsocket.c', 'src/bsd_sock.c',
   'src/bsd_io.c', 'src/bsd_sel.c', 'src/bsd_dup.c', 'src/bsd_db.c',
-  'src/netdb.c', 'src/fdtab.c', 'src/glue.S')
+  'src/netdb.c', 'src/machine.c', 'src/expansion.c', 'src/fdtab.c',
+  'src/glue.S')
 amigafmt = executable('amigafmt', srcs,
   dependencies: [libm, threads],
   install: true)
@@ -64,4 +65,10 @@ if get_option('ndk_fd_dir') != ''
        suite: 'tables')
 else
   message('ndk_fd_dir not set: the fdcheck test is not run')
+endif
+
+# the programs of a real AmigaOS installation, when there is one to use
+if get_option('sys_dir') != ''
+  test('survey', find_program('tools/survey.sh'), args: [get_option('sys_dir'), amigafmt],
+       timeout: 3600, suite: 'survey')
 endif

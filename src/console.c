@@ -19,7 +19,11 @@ static const char km_hi[0x41] =
 	"ASDFGHJKL:\"\000\000456"
 	"\000ZXCVBNM<>?\000.789";
 
-int keymap_convert(int code, int qual, char *out)
+static uint32_t keymap_struct(void);
+static uint32_t default_km;             /* SetKeyMapDefault()'s, 0 for US */
+static int map_key(uint32_t km, int code, int qual, char *out, int max);
+
+static int us_convert(int code, int qual, char *out)
 {
 	int shift = qual & 3, caps = qual & 4, ctrl = qual & 8, c;
 
@@ -80,6 +84,90 @@ int keymap_convert(int code, int qual, char *out)
 	return 0;
 }
 
+/* the built-in US keymap, or a copy of it (keymap.resource's "usa") */
+static int is_us(uint32_t km)
+{
+	return !km || ((uint32_t *)PTR(km))[1] == ((uint32_t *)PTR(keymap_struct()))[1];
+}
+
+/* a raw key in the default keymap (out has room for 8) */
+int keymap_convert(int code, int qual, char *out)
+{
+	if (is_us(default_km))
+		return us_convert(code, qual, out);
+	return map_key(default_km, code, qual, out, 8);
+}
+
+/*
+ * A raw key through a struct KeyMap's tables (devices/keymap.h): for
+ * keymaps loaded from DEVS:Keymaps.  The qualifiers a key's type names
+ * (KCF_SHIFT, KCF_ALT, KCF_CONTROL) pick one of up to four bytes, or one
+ * of the strings of a KCF_STRING key; KC_VANILLA's control clears bits
+ * 5 and 6.  Dead keys give the character they make on their own.
+ */
+#define KCF_SHIFT   1
+#define KCF_ALT     2
+#define KCF_CONTROL 4
+#define KCF_DEAD    0x20
+#define KCF_STRING  0x40
+#define KCF_NOP     0x80
+#define KC_VANILLA  7
+
+static int map_key(uint32_t kmp, int code, int qual, char *out, int max)
+{
+	uint32_t *km = PTR(kmp), data;
+	uint8_t *types, *caps, type;
+	int hi = code >= 0x40, k = hi ? code - 0x40 : code, idx = 0, bit = 0,
+	    want = 0, n = 0, i;
+
+	if (code & 0x80 || code > 0x67 || !km)
+		return 0;
+	types = PTR(km[hi ? 4 : 0]);
+	data = ((uint32_t *)PTR(km[hi ? 5 : 1]))[k];
+	caps = PTR(km[hi ? 6 : 2]);
+	type = types[k];
+	if (type & KCF_NOP)
+		return 0;
+	if (qual & 3)
+		want |= KCF_SHIFT;
+	if (qual & 0x30)
+		want |= KCF_ALT;
+	if (qual & 8)
+		want |= KCF_CONTROL;
+	if ((qual & 4) && caps && (caps[k >> 3] & (1 << (k & 7))))
+		want |= KCF_SHIFT;              /* caps lock on a capsable key */
+	/* the pressed qualifiers the key cares about, numbered in order */
+	for (i = 0; i < 3; i++) {
+		int q = 1 << i;
+		if (!(type & q))
+			continue;
+		if ((type & 7) == KC_VANILLA && q == KCF_CONTROL)
+			continue;
+		if (want & q)
+			idx |= 1 << bit;
+		bit++;
+	}
+	if (type & KCF_STRING) {
+		uint8_t *d = PTR(data);
+		int len = d[2 * idx], off = d[2 * idx + 1];
+		if (len > max)
+			len = max;
+		memcpy(out, d + off, len);
+		return len;
+	}
+	if (type & KCF_DEAD) {
+		uint8_t *d = PTR(data);
+		if (d[2 * idx] != 0)            /* a dead key, or one it modifies */
+			return d[2 * idx] & 8 ? 0 : (out[0] = d[2 * idx + 1], 1);
+		out[0] = d[2 * idx + 1];
+		return 1;
+	}
+	out[n] = data >> (8 * idx);
+	if ((type & 7) == KC_VANILLA && (want & KCF_CONTROL))
+		out[n] &= 0x9f;
+	return out[n] ? 1 : 0;
+}
+
 /* struct InputEvent: ie_Class at 4, ie_Code at 6, ie_Qualifier at 8 */
 static void c_RawKeyConvert(struct frame *f)
 {
@@ -91,7 +179,9 @@ static void c_RawKeyConvert(struct frame *f)
 		RET(0);
 		return;
 	}
-	n = keymap_convert(*(uint16_t *)(ie + 6), *(uint16_t *)(ie + 8), buf);
+	n = !is_us(A(2)) ?
+	    map_key(A(2), *(uint16_t *)(ie + 6), *(uint16_t *)(ie + 8), buf, 8) :
+	    keymap_convert(*(uint16_t *)(ie + 6), *(uint16_t *)(ie + 8), buf);
 	if (n > (int32_t)D(1)) {
 		RET(-1);
 		return;
@@ -139,7 +229,7 @@ static uint32_t keymap_struct(void)
 	}
 	for (i = 0; i < 40; i++) {
 		char buf[8];
-		int n = keymap_convert(0x40 + i, 0, buf), s;
+		int n = us_convert(0x40 + i, 0, buf), s;
 		if (n == 1) {
 			hit[i] = 0x00;          /* KC_NOQUAL */
 			himap[i] = (uint8_t)buf[0];
@@ -198,9 +288,19 @@ int console_io(void *iop)
 }
 static void c_Nop(struct frame *f) { (void)f; }
 
+/*
+ * The private V36 vectors are the console's snip (copy and paste)
+ * interface: GetConSnip, SetConSnip, AddConSnipHook, RemConSnipHook
+ * (C:ConClip).  There is no console window to select text in, so there
+ * is never a snip and a hook is never called.
+ */
+static void c_Zero(struct frame *f) { RET(0); }
+
 static const struct fdent fd_console[] = {
 	{ 30, "BeginIO", "a1" }, { 36, "AbortIO", "a1" },
 	{ 42, "CDInputHandler", "a0/a1" }, { 48, "RawKeyConvert", "a0/a1/d1/a2" },
+	{ 54, "consolePrivate1", "" }, { 60, "consolePrivate2", "" },
+	{ 66, "consolePrivate3", "" }, { 72, "consolePrivate4", "" },
 	{ 0, 0, 0 }
 };
 
@@ -208,6 +308,8 @@ static const struct libimpl console_impl[] = {
 	{ "RawKeyConvert", c_RawKeyConvert },
 	{ "CDInputHandler", c_CDInputHandler },
 	{ "BeginIO", c_Nop }, { "AbortIO", c_Nop },
+	{ "consolePrivate1", c_Zero }, { "consolePrivate2", c_Nop },
+	{ "consolePrivate3", c_Nop }, { "consolePrivate4", c_Nop },
 	{ NULL, NULL }
 };
 
@@ -228,7 +330,9 @@ static void k_MapRawKey(struct frame *f)
 		RET(0);
 		return;
 	}
-	n = keymap_convert(*(uint16_t *)(ie + 6), *(uint16_t *)(ie + 8), buf);
+	n = !is_us(A(2)) ?
+	    map_key(A(2), *(uint16_t *)(ie + 6), *(uint16_t *)(ie + 8), buf, 8) :
+	    keymap_convert(*(uint16_t *)(ie + 6), *(uint16_t *)(ie + 8), buf);
 	if (n > (int16_t)D(1)) {
 		RET(-1);
 		return;
@@ -272,7 +376,32 @@ static void k_MapANSI(struct frame *f)
 	RET(k / 2);
 }
 
-static void k_AskKeyMapDefault(struct frame *f) { RET(keymap_struct()); }
+static void k_AskKeyMapDefault(struct frame *f)
+{
+	RET(default_km ? default_km : keymap_struct());
+}
+
+static void k_SetKeyMapDefault(struct frame *f)
+{
+	default_km = A(0);
+}
+
+/*
+ * keymap.resource: the keymaps in memory, "usa" first (C:SetKeyboard
+ * finds or loads one there and makes it the default).
+ */
+static void keymap_resource(void)
+{
+	uint8_t *kr = amem_alloc(14 + 14 + 32), *kn = kr + 28;
+
+	((struct Node *)kr)->ln_Name = APTR_OF("keymap.resource");
+	((struct Node *)kr)->ln_Type = NT_RESOURCE;
+	exec_newlist(kr + 14);                          /* kr_List */
+	((struct Node *)kn)->ln_Name = APTR_OF("usa");
+	memcpy(kn + 14, PTR(keymap_struct()), 32);      /* kn_KeyMap */
+	exec_addtail(kr + 14, kn);
+	exec_addtail(&SysBase->ResourceList, kr);
+}
 
 static const struct fdent fd_keymap[] = {
 	{ 30, "SetKeyMapDefault", "a0" }, { 36, "AskKeyMapDefault", "" },
@@ -281,14 +410,21 @@ static const struct fdent fd_keymap[] = {
 };
 
 static const struct libimpl keymap_impl[] = {
-	{ "SetKeyMapDefault", c_Nop }, { "AskKeyMapDefault", k_AskKeyMapDefault },
+	{ "SetKeyMapDefault", k_SetKeyMapDefault },
+	{ "AskKeyMapDefault", k_AskKeyMapDefault },
 	{ "MapRawKey", k_MapRawKey }, { "MapANSI", k_MapANSI },
 	{ NULL, NULL }
 };
 
+static void keymap_setup(struct Library *b)
+{
+	(void)b;
+	keymap_resource();
+}
+
 struct amilib lib_keymap = {
 	.name = "keymap.library", .version = 40, .revision = 4,
-	.fd = fd_keymap, .impl = keymap_impl,
+	.fd = fd_keymap, .impl = keymap_impl, .init = keymap_setup,
 };
 
 /* ---- input.device: accepted, but the input stream is wbde's ----

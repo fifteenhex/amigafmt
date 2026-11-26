@@ -73,7 +73,8 @@ extern struct amilib lib_exec, lib_dos, lib_utility, lib_version,
 	lib_intuition, lib_graphics, lib_gadtools, lib_mathieeedoubbas,
 	lib_mathieeedoubtrans, lib_mathieeesingbas, lib_mathieeesingtrans,
 	lib_mathffp, lib_mathtrans, lib_timer, lib_icon, lib_layers, lib_console, lib_asl, lib_iffparse, lib_boopsi, lib_workbench, lib_datatypes,
-	lib_diskfont, lib_locale, lib_keymap, lib_input, lib_bsdsocket;
+	lib_diskfont, lib_locale, lib_keymap, lib_input, lib_bsdsocket,
+	lib_expansion;
 extern struct amilib *all_libs[];
 
 struct Library *lib_build(struct amilib *l);
@@ -105,6 +106,8 @@ int hunk_where(uint32_t addr, BPTR seg, int *hunk, uint32_t *off);
 /* path translation */
 void path_init(const char *progpath);
 int path_assign(const char *name, const char *target);
+int path_unassign(const char *name);
+int path_assign_dir(const char *name, const char *target);
 char *path_to_linux(const char *apath, const char *cwd);
 const char *path_cwd(void);
 void path_set_cwd(const char *lpath);
@@ -117,6 +120,33 @@ void timer_sleep(int64_t us);
 
 /* exec */
 void exec_init(void);
+void exec_newlist(void *l);
+void exec_addtail(void *l, void *n);
+void exec_enqueue(void *l, void *n);
+void exec_remove(void *n);
+
+/* the machine (machine.c) */
+#define CHIPSET_OCS 0
+#define CHIPSET_ECS 1
+#define CHIPSET_AGA 2
+#define MACHINE_REGIONS 8
+struct machine {
+	int amiga;              /* Linux says this is an Amiga */
+	char model[32];
+	int chipset, pal, hr_denise;
+	uint32_t eclock, chip_size;
+	int psfreq;
+	int nregions;
+	struct { uint32_t base, size; } region[MACHINE_REGIONS];   /* fast RAM */
+};
+extern struct machine machine;
+void machine_init(void);
+void machine_memlist(struct ExecBase *e);
+void machine_memfree(uint32_t *chip_total, uint32_t *chip_free,
+		     uint32_t *fast_total, uint32_t *fast_free);
+uint8_t machine_chiprev(void);
+uint16_t machine_vposr(void);
+uint16_t machine_deniseid(void);
 /* Linux descriptors a task sleeps on (see exec.c) */
 struct pollfd;
 struct exec_fdwait {
@@ -147,6 +177,12 @@ void dos_exit(int32_t code);
 extern char *dos_args;
 extern uint32_t dos_arglen;
 void dos_preload_args(const char *s, uint32_t len);
+
+/* the shell */
+void shell_init(void);
+int32_t shell_main(const char *text);
+int32_t shell_after(int32_t rc);
+extern struct amilib lib_shellcmd;
 int dos_take_args(const char **s, int32_t *len);
 
 /* RawDoFmt engine shared by exec and dos */

@@ -1,0 +1,25 @@
+hello world
+b bc $x $nonesuch
+said it !
+inner outer
+Fail limit: 10
+arglen 1 args []
+ReadArgs: required argument missing
+nested
+RC=0
+equal
+greater
+Fault 205: object not found
+Fault 103: not enough memory available
+Current stack size is 9000 bytes
+redirected
+appended
+arglen 7 args [a TO b]
+FROM[0] = "a"
+TO = "b"
+QUIET = 0
+TOG = -1
+Exit gave 4
+Echo: usecount -2
+from RunCommand
+rc=3

@@ -430,10 +430,16 @@ static int is_topaz(const char *n)
 /* a font in memory (topaz from wbde, or one diskfont loaded), else NULL */
 static struct TextFont *font_in_memory(struct TextAttr *ta)
 {
+	static int warned;
+
 	if (!gui_topaz)
 		gui_connect();
-	if (!ta || !ta->ta_Name || is_topaz(PTR(ta->ta_Name)))
+	if (!ta || !ta->ta_Name || is_topaz(PTR(ta->ta_Name))) {
+		if (!gui_topaz && !warned++)
+			af_warn("%s: no wbde to give the topaz font (WBDE_SOCKET)",
+				af_progname);
 		return gui_topaz;
+	}
 	return diskfont_find(PTR(ta->ta_Name), ta->ta_YSize, 0);
 }
 
@@ -1817,6 +1823,12 @@ static void g_GetRPAttrsA(struct frame *f)
 	}
 }
 
+/* SetChipRev: the chips are the machine's, so ChipRevBits0 is the answer */
+static void g_SetChipRev(struct frame *f)
+{
+	RET(*((uint8_t *)GfxBase + 0xec));
+}
+
 static const struct libimpl gfx_impl[] = {
 	{ "InitRastPort", g_InitRastPort },
 	{ "SetAPen", g_SetAPen }, { "SetBPen", g_SetBPen },
@@ -1859,6 +1871,7 @@ static const struct libimpl gfx_impl[] = {
 	{ "WaitTOF", g_WaitTOF }, { "WaitBlit", g_Nop },
 	{ "OwnBlitter", g_Nop }, { "DisownBlitter", g_Nop },
 	{ "VBeamPos", g_Zero }, { "WaitBOVP", g_Nop },
+	{ "SetChipRev", g_SetChipRev },
 	{ "NewRegion", g_NewRegion }, { "DisposeRegion", g_DisposeRegion },
 	{ "ClearRegion", g_ClearRegion }, { "OrRectRegion", g_OrRectRegion },
 	{ "AndRectRegion", g_AndRectRegion }, { "XorRectRegion", g_OrRectRegion },
@@ -1877,6 +1890,9 @@ static void gfx_setup(struct Library *b)
 	extern void gfx_monitors_init(void);
 
 	GfxBase = b;            /* DefaultFont is set when wbde gives topaz */
+	*((uint8_t *)b + 0xec) = machine_chiprev();     /* ChipRevBits0 */
+	/* MemType: an AGA machine's chip RAM is 32 bits wide, double CAS */
+	*((uint8_t *)b + 0xed) = machine.chipset == CHIPSET_AGA ? 3 : 0;
 	gfx_monitors_init();
 }
 

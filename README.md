@@ -3,10 +3,11 @@
 amigafmt runs AmigaOS executables (hunk format) directly on m68k Linux.
 The CPU executes the 68k code natively; amigafmt loads the hunks and
 provides the operating system: exec, dos, utility, intuition, graphics,
-layers, gadtools, icon, iffparse, asl, diskfont, locale, keymap, the math
-libraries, console, timer and input devices, workbench and datatypes
-stand-ins, BOOPSI, custom screens, the blitter, cooperative tasks,
-libraries loaded from disk, and bsdsocket.library on Linux sockets.
+layers, gadtools, icon, iffparse, asl, diskfont, locale, keymap,
+expansion, the math libraries, console, timer and input devices,
+workbench and datatypes stand-ins, BOOPSI, custom screens, the blitter,
+cooperative tasks, libraries loaded from disk, bsdsocket.library on
+Linux sockets, and the AmigaOS shell with its scripts.
 Registered with binfmt_misc, an Amiga program is started like any other
 Linux program, each in its own Linux process.
 
@@ -51,6 +52,13 @@ At configure time `tools/floatcheck.c` is compiled and run (through the
 exe wrapper when cross-compiling): Debian's gcc 16 for m68k miscompiles
 a float kept live across a call at -O2, and when the check fails, or
 cannot be run, the whole build gets `-ffloat-store`, which avoids it.
+
+`tools/survey.sh <SYS: directory> build/amigafmt` runs the programs of
+a real AmigaOS installation (a mounted Workbench partition, or a copy of
+the Workbench disks; it is only read) and prints a table of how each one
+fares: a list of command lines with the output and exit code AmigaOS
+gives, the shell's own commands, then every other program once.
+`-Dsys_dir=<directory>` makes it part of `meson test` (suite `survey`).
 
 `meson test` compiles the programs in `tests/` into hunk files with
 `tools/mkhunk.py` and runs each through amigafmt (`tests/check.sh`,
@@ -118,8 +126,10 @@ does not exist, as on an Amiga filesystem.
 ## Running programs
 
     amigafmt [options] program [arguments...]
+    amigafmt [options] -c command-line [-c command-line...]
 
       -a NAME=PATH  assign NAME: to a Linux directory or Amiga path
+      -c LINE       run LINE in the AmigaOS shell (repeatable)
       -s BYTES      stack size (default 262144)
       -t            trace every library call to stderr
       -u            a leading / is the Linux root, not the parent
@@ -140,9 +150,30 @@ return code is the exit status.
 ### CLI programs
 
 `amigafmt /mnt/sys/C/List SYS:Libs/m#?` or, registered, `./List`.
-`System()` and `Execute()` run further AmigaOS programs in the same
-process (with redirections) and hand anything else to `/bin/sh -c`;
-scripts are not run, as there is no AmigaOS shell.
+
+### The shell
+
+`-c` runs lines through amigafmt's AmigaOS shell, one line each:
+
+    amigafmt -c 'Set x world' -c 'Echo "hello $x"' -c 'Execute S:myscript'
+    amigafmt -c NewShell        # an interactive Shell on the terminal
+
+It parses lines as the 3.1 Shell does (`;` comments, `$var`, backquoted
+commands, aliases, `<`, `>` and `>>` right after the command name), and
+has the Shell's own commands: Alias, Ask, CD, Echo, Else, EndCLI, EndIf,
+EndShell, EndSkip, FailAt, Fault, Get, Getenv, If, Lab, NewCLI, NewShell,
+Path, Prompt, Quit, Resident, Run, Set, Setenv, Skip, Stack, Unalias,
+Unset, Unsetenv and Why.  Commands are looked up in the resident list,
+then as a path, in the current directory, along the path and in C:.
+Scripts run the AmigaOS way, through `C:Execute` from SYS:, which
+handles `.key` arguments; a command whose return code reaches the fail
+level ends the script.  A command that is not an AmigaOS program is
+handed to the Linux shell (`/bin/sh -c`).  Everything runs in the one
+process, so assigns, variables and the current directory last for the
+rest of the lines; Run forks a second process.
+
+`System()` and `Execute()` from a program go through the same shell,
+so `IconX` scripts started by wbde work too.
 
 ### GUI programs with wbde
 
@@ -173,10 +204,13 @@ and no CLI.
 | `AMIGAFMT_RAWCSI` | do not translate console control sequences |
 | `AMIGAFMT_SCREENSCALE` | custom screen scaling: `1` or `modeid` |
 | `AMIGAFMT_HANGDUMP` | seconds between reports of where the program is (for hangs) |
+| `AMIGAFMT_ZORRO` | the expansion boards: `none`, a directory of ConfigDevs, or `manufacturer/product@address/size,...` |
 | `WBDE_SOCKET` | wbde's socket (default `/tmp/wbde.sock`) |
 | `WBDE_ICON`, `WBDE_STACK` | set by wbde: start from an icon, stack size |
 
 ## What works and what does not
+
+`tools/survey.sh` gives the current answer for a given installation.
 
 Works:
 
@@ -184,7 +218,14 @@ Works:
   (Version, Date, Avail, Eval, Dir, List, Info, Assign, Status, Which,
   CPU, Copy, Join, Type, Sort, Search, MakeDir, Rename, Protect,
   SetDate, Delete, MakeLink, Filenote, Wait, Break, ChangeTaskPri,
-  RequestChoice), LhA, UnZip.
+  Execute, IconX, SetPatch, IPrefs, ConClip, AddDataTypes, SetKeyboard,
+  RequestChoice), Tools/ShowConfig, Utilities/More, LhA, UnZip.
+* Scripts and the Shell's own commands (see The shell), and ARexx
+  inside one shell: `amigafmt -c SYS:System/RexxMast -c 'RX script'`.
+* ShowConfig's view of the machine: on an Amiga the Zorro boards Linux
+  found (expansion.library's ConfigDevs), the chipset, PAL or NTSC and
+  the memory regions from `/proc/hardware` and `/proc/iomem`; elsewhere
+  an NTSC AGA machine with no boards (`AMIGAFMT_ZORRO` describes some).
 * GUI programs on wbde: Workbench's Clock, Calculator, KeyShow,
   IconEdit, the Preferences editors (Serial, Font, IControl, Time,
   Workbench, Asl), programs with their own custom screens, HAM screens,
@@ -196,11 +237,15 @@ Works:
 
 Does not work:
 
-* Scripts (`C:Execute`, `IconX`) and anything else that needs an
-  AmigaOS shell.
 * Anything that needs an AmigaOS filesystem or device handler: Lock,
-  Relabel, AddBuffers, DiskChange, Mount, Format, Install; the
-  clipboard; serial, parallel, printer and trackdisk devices.
+  Relabel, AddBuffers, DiskChange, Mount, Format, Install, DiskCopy
+  refuse cleanly; the clipboard; serial, parallel, printer and
+  trackdisk devices.  Nothing touches the hardware: expansion.library
+  configures no board, SetClock finds no battery-backed clock.
+* Things that outlive a process: each program is its own Linux process,
+  so assigns, variables, resident commands and the ARexx server made by
+  one command are gone for the next unless both run in one shell (`-c`).
+  Run forks.
 * Datatypes (the library is present but knows no types), AmigaGuide,
   locale catalogs (everything is English), colorwheel and other disk
   BOOPSI classes, commodities.
@@ -209,9 +254,11 @@ Does not work:
   busy-loops starves the others.
 * Hardware access other than the custom chip reads and blitter writes
   that are emulated; address 4 and the chip registers are read through
-  `MOVE` only.
+  `MOVE`, `AND`, `OR`, `CMP` and `TST` only.
 * Console windows (`CON:` on a wbde window), input handlers (accepted,
   never called), the Roadshow extensions to bsdsocket and IPv6.
+* Programs that need workbench.library 45 (3.1.4's LoadWB): amigafmt's
+  libraries are version 40.
 
 ## Debugging
 

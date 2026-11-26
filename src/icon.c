@@ -9,6 +9,7 @@
 #include <string.h>
 #include <strings.h>
 #include "af.h"
+#include "gui.h"
 
 struct ird {
 	const uint8_t *p;
@@ -277,7 +278,14 @@ static const struct fdent fd_wb[] = {
 	{ 0, 0, 0 }
 };
 
+/* the Workbench is wbde: it is running when wbde answers */
+static void wb_StartWorkbench(struct frame *f)
+{
+	RET(gui_connect() ? 0 : DOSTRUE);
+}
+
 static const struct libimpl wb_impl[] = {
+	{ "StartWorkbench", wb_StartWorkbench },
 	{ "AddAppWindowA", wb_Add }, { "RemoveAppWindow", wb_Remove },
 	{ "AddAppIconA", wb_Add }, { "RemoveAppIcon", wb_Remove },
 	{ "AddAppMenuItemA", wb_Add }, { "RemoveAppMenuItem", wb_Remove },

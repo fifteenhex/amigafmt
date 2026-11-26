@@ -26,6 +26,7 @@
 struct assign {
 	char *name;             /* without the colon */
 	char *target;           /* Amiga or Linux path */
+	int noname;             /* never used to name a path (path_to_amiga) */
 };
 
 static struct assign assigns[64];
@@ -33,7 +34,7 @@ static int nassigns;
 static char cwd[PATH_MAX];
 int path_unix;                  /* leading '/' is the Linux root */
 
-int path_assign(const char *name, const char *target)
+static int assign(const char *name, const char *target, int noname)
 {
 	char n[64];
 	size_t l = strlen(name);
@@ -49,14 +50,45 @@ int path_assign(const char *name, const char *target)
 		if (!strcasecmp(assigns[i].name, n)) {
 			free(assigns[i].target);
 			assigns[i].target = strdup(target);
+			assigns[i].noname = noname;
 			return 1;
 		}
 	if (nassigns == 64)
 		return 0;
 	assigns[nassigns].name = strdup(n);
 	assigns[nassigns].target = strdup(target);
+	assigns[nassigns].noname = noname;
 	nassigns++;
 	return 1;
+}
+
+int path_assign(const char *name, const char *target)
+{
+	return assign(name, target, 0);
+}
+
+/* an assign the program makes: like AmigaOS's, it names no path */
+int path_assign_dir(const char *name, const char *target)
+{
+	return assign(name, target, 1);
+}
+
+int path_unassign(const char *name)
+{
+	size_t l = strlen(name);
+	int i;
+
+	if (l && name[l - 1] == ':')
+		l--;
+	for (i = 0; i < nassigns; i++)
+		if (strlen(assigns[i].name) == l &&
+		    !strncasecmp(assigns[i].name, name, l)) {
+			free(assigns[i].name);
+			free(assigns[i].target);
+			assigns[i] = assigns[--nassigns];
+			return 1;
+		}
+	return 0;
 }
 
 static void read_conf(const char *file)
@@ -282,7 +314,7 @@ char *path_to_amiga(const char *lpath)
 
 	for (i = 0; i < nassigns; i++) {
 		const char *dir = assigns[i].target;
-		if (dir[0] != '/')
+		if (dir[0] != '/' || assigns[i].noname)
 			continue;
 		for (k = 0; skip[k]; k++)
 			if (!strcasecmp(assigns[i].name, skip[k]))
